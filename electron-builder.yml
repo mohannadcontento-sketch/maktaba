@@ -1,0 +1,34 @@
+appId: com.maktaba.reader
+productName: مكتبة
+copyright: Maktaba © 2026
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**
+
+asarUnpack:
+  - "**/*.node"
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  shortcutName: مكتبة
+  artifactName: Maktaba-Setup-${version}.${ext}
+
+portable:
+  artifactName: Maktaba-Portable-${version}.${ext}
+
+compression: maximum

@@ -1,0 +1,178 @@
+@import 'tailwindcss';
+
+/* ---------- خطوط القراءة العربية المدمجة ---------- */
+@font-face {
+  font-family: 'Amiri';
+  src: url('/fonts/Amiri-Regular.ttf') format('truetype');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Cairo';
+  src: url('/fonts/Cairo-Variable.ttf') format('truetype');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Tajawal';
+  src: url('/fonts/Tajawal-Regular.ttf') format('truetype');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Naskh Arabic';
+  src: url('/fonts/NotoNaskhArabic-Variable.ttf') format('truetype');
+  font-display: swap;
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-ui: 'Cairo', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-arabic-read: 'Amiri', 'Noto Naskh Arabic', 'Traditional Arabic', serif;
+  --color-app: #f4f5f7;
+  --color-surface: #ffffff;
+  --color-surface2: #fafbfc;
+  --color-line: #e3e6ea;
+  --color-ink: #191d24;
+  --color-muted: #67707f;
+  --color-accent: #0d9488;
+  --color-accent-strong: #0f766e;
+
+  --color-dapp: #0f1115;
+  --color-dsurface: #161a20;
+  --color-dsurface2: #1d222b;
+  --color-dline: #272d38;
+  --color-dink: #e6e9ee;
+  --color-dmuted: #8b94a5;
+  --color-daccent: #2dd4bf;
+}
+
+/* ---------- أساسيات ---------- */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  @apply bg-app text-ink dark:bg-dapp dark:text-dink;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgb(0 0 0 / 0.18);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.dark *::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.16);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input[type='range'] {
+  accent-color: var(--color-accent);
+}
+
+/* منطقة سحب شريط العنوان */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ---------- طبقة نص PDF ---------- */
+.textLayer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 2;
+  cursor: auto;
+}
+.textLayer span,
+.textLayer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+.textLayer {
+  opacity: 1;
+}
+.textLayer ::selection {
+  background: rgb(13 148 136 / 0.35);
+  mix-blend-mode: multiply;
+}
+.dark .textLayer ::selection {
+  background: rgb(45 212 191 / 0.4);
+  mix-blend-mode: screen;
+}
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: -1;
+  cursor: default;
+  user-select: none;
+}
+
+/* وضع ليلي لصفحات PDF (قلب الألوان) */
+.pdf-night canvas {
+  filter: invert(0.92) hue-rotate(180deg) brightness(1.05) contrast(0.95);
+}
+
+/* ---------- حاوية EPUB ---------- */
+.epub-container {
+  background: transparent !important;
+}
+.epub-container iframe {
+  border-radius: 6px;
+}
+
+/* حركات */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.anim-in {
+  animation: fadeIn 0.18s ease-out;
+}
+
+@keyframes pulseSoft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+.pulse-soft {
+  animation: pulseSoft 1.6s ease-in-out infinite;
+}

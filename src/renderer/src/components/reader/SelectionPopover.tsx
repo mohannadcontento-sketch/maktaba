@@ -1,0 +1,109 @@
+import { useEffect, useState } from 'react'
+import { Highlighter, Underline, StickyNote, Copy, Globe } from 'lucide-react'
+import { useReader, HIGHLIGHT_COLORS } from '@/stores/reader'
+import { useUi } from '@/stores/ui'
+
+/**
+ * لوحة عائمة فوق نص محدد تعرض أدوات التمييز/التسطير/الملاحظة/النسخ
+ * تعمل مع القارئين معًا عبر window.__pdfCreateAnnotation أو __epubCreateAnnotation
+ */
+export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
+  const sel = useReader((s) => s.selection)
+  const setSelection = useReader((s) => s.setSelection)
+  const ui = useUi()
+  const [pos, setPos] = useState({ top: -9999, left: -9999 })
+  const [showColors, setShowColors] = useState(false)
+
+  useEffect(() => {
+    if (!sel) {
+      setShowColors(false)
+      return
+    }
+    // إحداثيات الشاشة: PDF يعطي إحداثيات داخل الحاوية، لذا نحسبها من rect الممرر
+    const width = 260
+    const left = Math.max(12, Math.min(window.innerWidth - width - 12, sel.rect.x))
+    const top = Math.max(60, sel.rect.y - 52)
+    setPos({ top, left })
+  }, [sel])
+
+  if (!sel) return null
+
+  const create = (type: 'highlight' | 'underline' | 'note', color: string): void => {
+    const fn = isPdf
+      ? (window as unknown as { __pdfCreateAnnotation?: (t: typeof type, c: string) => void })
+          .__pdfCreateAnnotation
+      : (window as unknown as { __epubCreateAnnotation?: (t: typeof type, c: string) => Promise<void> })
+          .__epubCreateAnnotation
+    fn?.(type, color)
+    if (!isPdf) setSelection(null)
+  }
+
+  return (
+    <div
+      className="fixed z-[70] anim-in flex items-center gap-0.5 rounded-xl border border-black/10 bg-white/97 p-1 shadow-xl backdrop-blur dark:border-white/15 dark:bg-dsurface2/97"
+      style={{ top: pos.top, left: pos.left }}
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      {/* تمييز بألوان */}
+      <div className="relative">
+        <button
+          className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-black/[0.06] dark:hover:bg-white/10"
+          onClick={() => setShowColors((s) => !s)}
+          title="تمييز"
+        >
+          <Highlighter size={15} />
+        </button>
+        {showColors && (
+          <div className="absolute start-0 top-full mt-1 flex gap-1 rounded-xl border border-black/10 bg-white p-1.5 shadow-lg dark:border-white/15 dark:bg-dsurface2">
+            {HIGHLIGHT_COLORS.map((c) => (
+              <button
+                key={c}
+                className="h-6 w-6 rounded-full ring-offset-1 transition-transform hover:scale-110"
+                style={{ backgroundColor: c }}
+                onClick={() => {
+                  create('highlight', c)
+                  setShowColors(false)
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+      <button
+        className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
+        title="تسطير"
+        onClick={() => create('underline', '#3b82f6')}
+      >
+        <Underline size={15} />
+      </button>
+      <button
+        className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
+        title="ملاحظة"
+        onClick={() => create('note', '#f59e0b')}
+      >
+        <StickyNote size={15} />
+      </button>
+      <span className="mx-0.5 h-5 w-px bg-black/10 dark:bg-white/15" />
+      <button
+        className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
+        title="نسخ"
+        onClick={() => {
+          void navigator.clipboard.writeText(sel.text).then(() => ui.toast('تم النسخ', 'success'))
+          setSelection(null)
+        }}
+      >
+        <Copy size={15} />
+      </button>
+      <button
+        className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
+        title="بحث في الويب"
+        onClick={() => {
+          window.open(`https://www.google.com/search?q=${encodeURIComponent(sel.text.slice(0, 120))}`, '_blank')
+          setSelection(null)
+        }}
+      >
+        <Globe size={15} />
+      </button>
+    </div>
+  )
+}
