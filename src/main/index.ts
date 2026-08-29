@@ -4,12 +4,17 @@ import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { initDb } from './db'
 import { registerIpc } from './ipc'
-import { bookFilePath } from './library'
+import { bookFilePath, coversDir } from './library'
 
 // يجب التسجيل قبل جاهزية التطبيق
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'book',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true }
+  },
+  {
+    // بروتوكول الأغلفة — بديل file:// الذي تحظره CSP وقواعد الأصل المختلط
+    scheme: 'cover',
     privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true }
   }
 ])
@@ -110,6 +115,43 @@ async function netFetchFile(p: string): Promise<Response> {
   return res
 }
 
+/**
+ * بروتوكول cover://img/<اسم الملف> — يخدم صور الأغلفة من مجلد الأغلفة داخل userData
+ * الاسم محصور بغير مسارات لمنع أي تجاوز
+ */
+function registerCoverProtocol(): void {
+  protocol.handle('cover', async (request) => {
+    try {
+      const url = new URL(request.url)
+      // الصيغة: cover://img/<basename> — المضيف ثابت img والاسم في المسار
+      const rawName = decodeURIComponent(url.pathname.replace(/^\//, ''))
+      const host = url.host
+      if (host !== 'img' || !rawName) {
+        return new Response('not found', { status: 404 })
+      }
+      const name = path.basename(rawName)
+      if (!/^[A-Za-z0-9._-]+\.(png|jpe?g|webp|gif)$/i.test(name)) {
+        return new Response('bad request', { status: 400 })
+      }
+      const full = path.join(coversDir(), name)
+      if (!fs.existsSync(full)) {
+        return new Response('not found', { status: 404 })
+      }
+      const ext = path.extname(full).toLowerCase()
+      const mime = MIME[ext] ?? 'application/octet-stream'
+      // نعيد بايتات مخزّنة وليست stream — تحميل <img> من استجابة متدفقة يفشل في فك التشفير أحيانًا
+      const bytes = new Uint8Array(fs.readFileSync(full))
+      return new Response(bytes, {
+        status: 200,
+        headers: { 'content-type': mime, 'access-control-allow-origin': '*' }
+      })
+    } catch (err) {
+      console.error('cover protocol error:', request.url, err)
+      return new Response('error', { status: 500 })
+    }
+  })
+}
+
 // منع تعدد النوافذ + استقبال ملفات "فتح باستخدام"
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
@@ -131,6 +173,7 @@ if (!gotLock) {
     initDb()
     registerIpc()
     registerBookProtocol()
+    registerCoverProtocol()
 
     // منع التنقل بالسحب والإفلات على مستوى الويب
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {

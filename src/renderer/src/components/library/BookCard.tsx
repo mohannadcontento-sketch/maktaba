@@ -4,7 +4,7 @@ import { MoreVertical, BookOpen, Star, Heart, FolderPlus, FolderMinus, ExternalL
 import type { Book } from '../../../../shared/types'
 import { useLibrary } from '@/stores/library'
 import { useUi } from '@/stores/ui'
-import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
+import { cn, formatBytes, formatRelativeTime, coverUrl } from '@/lib/utils'
 import { ProgressBar, Badge } from '@/components/ui/kit'
 import { DropdownMenu, ContextMenu, type MenuItem } from '@/components/ui/Menu'
 import { MetadataDialog } from './MetadataDialog'
@@ -17,6 +17,9 @@ interface CardProps {
 }
 
 export function CoverImage({ book, className }: { book: Book; className?: string }) {
+  // نتعقب المسار الذي فشل تحميله حتى تتم إعادة المحاولة تلقائيًا عند جلب غلاف جديد
+  const [brokenPath, setBrokenPath] = useState<string | null>(null)
+
   const initials = useMemo(() => {
     const words = (book.title || '?').trim().split(/\s+/)
     return (words[0]?.[0] ?? '') + (words[1]?.[0] ?? '')
@@ -27,12 +30,16 @@ export function CoverImage({ book, className }: { book: Book; className?: string
     [book.id]
   )
 
-  if (book.coverPath) {
+  const src = useMemo(() => coverUrl(book.coverPath), [book.coverPath])
+  const showImg = !!src && brokenPath !== book.coverPath
+
+  if (showImg && src) {
     return (
       <img
-        src={`file://${book.coverPath.replace(/\\/g, '/')}`}
+        src={src}
         alt={book.title}
         draggable={false}
+        onError={() => setBrokenPath(book.coverPath)}
         className={cn('h-full w-full object-cover', className)}
         loading="lazy"
       />

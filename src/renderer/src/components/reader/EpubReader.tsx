@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ePub, { type Book as EpubBook, type Rendition, type Contents, type NavItem } from 'epubjs'
 import type { Book } from '../../../../shared/types'
-import { useReader, READER_FONTS, type ReaderSettings } from '@/stores/reader'
-import { clamp } from '@/lib/utils'
+import { useReader, type ReaderSettings } from '@/stores/reader'
+import { clamp, isRtlLang } from '@/lib/utils'
 
 export interface TocEntry {
   label: string
@@ -23,6 +23,8 @@ export interface EpubHandle {
 interface Props {
   book: Book
   settings: ReaderSettings
+  /** آخر موقع معروف — يُستخدم عند إعادة الفتح أو تبديل وضع العرض */
+  resumeCfi?: string | null
   onDocReady(info: { toc: TocEntry[]; handle: EpubHandle; percent: number }): void
   onRelocate(percent: number, cfi: string): void
 }
@@ -37,13 +39,37 @@ const THEME_RULES: Record<string, string> = {
           img, svg, video { filter: brightness(0.85); }`
 }
 
-export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
+export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }: Props) {
   const reader = useReader()
   const viewerRef = useRef<HTMLDivElement>(null)
   const bookRef = useRef<EpubBook | null>(null)
   const renditionRef = useRef<Rendition | null>(null)
   const [failed, setFailed] = useState(false)
   const [ready, setReady] = useState(false)
+  const [, setProgress] = useState(0)
+
+  // ---------- مواضع وحالة داخلية ----------
+  const lastCfiRef = useRef<string | null>(
+    resumeCfi?.startsWith('epubcfi')
+      ? resumeCfi
+      : book.lastLocation && book.lastLocation.startsWith('epubcfi')
+        ? book.lastLocation
+        : null
+  )
+  const lastSpineIndexRef = useRef(0)
+  const lastPctRef = useRef(0)
+  const pendingPercentRef = useRef<number | null>(null)
+  const flowRef = useRef(settings.flow)
+  const rtlRef = useRef(isRtlLang(book.language))
+  const flipCooldownRef = useRef(0)
+
+  const onRelocateRef = useRef(onRelocate)
+  useEffect(() => {
+    onRelocateRef.current = onRelocate
+  }, [onRelocate])
+
+  // إرسال تقدم القراءة مؤجلًا (يعمل دائمًا بأحدث نسخة من onRelocate)
+  const onRelocateDebouncedRef = useRef<(pct: number, cfi: string) => void>(() => {})
 
   // ---------- بناء قواعد السمة ----------
   const buildThemeCss = useCallback((s: ReaderSettings): string => {
@@ -68,7 +94,9 @@ export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
     }
     const align = alignMap[s.align] ?? 'justify'
     const weight = s.fontFamily === 'tajawal-bold' ? '700' : '400'
-    return `\n      ${fontFaces}\n      body { font-family: ${family} !important; font-weight: ${weight} !important; }\n      p, li, div { line-height: ${s.lineHeight} !important; }\n      p { text-align: ${align} !important; }\n      body {\n        padding-left: ${Math.max(0, s.marginLeft)}% !important;\n        padding-right: ${Math.max(0, s.marginRight)}% !important;\n        padding-top: ${Math.max(0, s.marginTop)}% !important;\n        padding-bottom: ${Math.max(0, s.marginBottom)}% !important;\n        box-sizing: border-box;\n      }\n      img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n    `
+    // ملاحظة: الهوامش تُطبق على حاوية التطبيق نفسها (wrapper) وليس على body الكتاب
+    // لأن padding بالنسب المئوية لا يعمل بشكل صحيح في تخطيط الأعمدة (paginated) الخاص بـ epub.js
+    return `\n      ${fontFaces}\n      body { font-family: ${family} !important; font-weight: ${weight} !important; }\n      p, li, div { line-height: ${s.lineHeight} !important; }\n      p { text-align: ${align} !important; }\n      img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n    `
   }, [])
 
   const attachedIdsRef = useRef(new Set<string>())
@@ -109,10 +137,129 @@ export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
     [buildThemeCss]
   )
 
-  // ---------- التهيئة ----------
-  const lastCfiRef = useRef<string | null>(book.lastLocation ?? null)
-  const [, setProgress] = useState(0)
+  // ---------- حاوية التمرير في وضع scrolled ----------
+  const scrollerEl = useCallback((): HTMLElement | null => {
+    const v = viewerRef.current
+    if (!v) return null
+    // epub.js ينشئ حاوية .epub-container هي نفسها القابلة للتمرير في وضع scrolled
+    return (v.querySelector('.epub-container') as HTMLElement | null) ?? v
+  }, [])
 
+  // حساب النسبة في وضع التمرير: (مؤشر القسم الحالي + نسبة التمرير داخله) / عدد الأقسام
+  const reportScrollProgress = useCallback((immediate = false): void => {
+    const el = scrollerEl()
+    const b = bookRef.current
+    if (!el || !b) return
+    const max = el.scrollHeight - el.clientHeight
+    const frac = max > 0 ? clamp(el.scrollTop / max, 0, 1) : 0
+    const total = spineCount()
+    const idx = lastSpineIndexRef.current
+    const pct = total ? clamp(((idx + frac) / total) * 100, 0, 100) : lastPctRef.current
+    lastPctRef.current = pct
+    const cfi = lastCfiRef.current
+    if (!cfi) return
+    if (immediate) onRelocateRef.current(pct, cfi)
+    else onRelocateDebouncedRef.current(pct, cfi)
+  }, [scrollerEl])
+
+  const reportScrollRef = useRef(reportScrollProgress)
+  useEffect(() => {
+    reportScrollRef.current = reportScrollProgress
+  }, [reportScrollProgress])
+
+  // ---------- التنقل (متوافق مع الوضعين) ----------
+  const next = useCallback((): void => {
+    if (flowRef.current === 'scrolled') {
+      const el = scrollerEl()
+      if (el) {
+        const max = el.scrollHeight - el.clientHeight
+        if (max > 0 && el.scrollTop < max - 4) {
+          el.scrollTo({ top: Math.min(max, el.scrollTop + el.clientHeight * 0.88), behavior: 'smooth' })
+          return
+        }
+      }
+      // نهاية القسم → القسم التالي
+    }
+    void renditionRef.current?.next()
+  }, [scrollerEl])
+
+  const prev = useCallback((): void => {
+    if (flowRef.current === 'scrolled') {
+      const el = scrollerEl()
+      if (el) {
+        if (el.scrollTop > 4) {
+          el.scrollTo({ top: Math.max(0, el.scrollTop - el.clientHeight * 0.88), behavior: 'smooth' })
+          return
+        }
+      }
+      // بداية القسم → القسم السابق
+    }
+    void renditionRef.current?.prev()
+  }, [scrollerEl])
+
+  const nextRef = useRef(next)
+  const prevRef = useRef(prev)
+  useEffect(() => {
+    nextRef.current = next
+    prevRef.current = prev
+  }, [next, prev])
+
+  // قلب الصفحة بعجلة الفأرة في وضع الصفحات (مع مانع تكرار للأجهزة اللمسية)
+  const flip = useCallback((dir: 1 | -1): void => {
+    const now = Date.now()
+    if (now - flipCooldownRef.current < 350) return
+    flipCooldownRef.current = now
+    if (dir > 0) nextRef.current()
+    else prevRef.current()
+  }, [])
+
+  const wheelFlip = useCallback(
+    (e: { deltaY: number; preventDefault(): void }): void => {
+      if (flowRef.current !== 'paginated') return // وضع التمرير يتكفل به المتصفح طبيعيًا
+      if (Math.abs(e.deltaY) < 4) return
+      e.preventDefault()
+      flip(e.deltaY > 0 ? 1 : -1)
+    },
+    [flip]
+  )
+
+  // ---------- مفاتيح الأسهم داخل iframe الكتاب ----------
+  const keyNav = useCallback((key: string): void => {
+    const fwd =
+      key === 'ArrowDown' ||
+      key === 'PageDown' ||
+      key === ' ' ||
+      (key === 'ArrowLeft' && rtlRef.current) ||
+      (key === 'ArrowRight' && !rtlRef.current)
+    const back =
+      key === 'ArrowUp' ||
+      key === 'PageUp' ||
+      (key === 'ArrowRight' && rtlRef.current) ||
+      (key === 'ArrowLeft' && !rtlRef.current)
+    if (fwd) nextRef.current()
+    else if (back) prevRef.current()
+  }, [])
+
+  // ---------- مؤشر الفهرس من CFI ----------
+  const spineIndexOf = useCallback((cfi: string): number | null => {
+    const b = bookRef.current
+    if (!b) return null
+    try {
+      const sec = b.spine.get(cfi)
+      return sec ? (sec as { index?: number }).index ?? null : null
+    } catch {
+      return null
+    }
+  }, [])
+
+  // عدد أقسام الكتاب (spineItems موجودة وقت التشغيل لكنها ناقصة في التعريفات)
+  const spineCount = useCallback((): number => {
+    const b = bookRef.current
+    if (!b) return 0
+    return (b.spine as unknown as { spineItems?: unknown[] }).spineItems?.length ?? 0
+  }, [])
+
+  // ---------- التهيئة ----------
   function debounceCb<T extends unknown[]>(fn: (...args: T) => void, ms: number): ((...args: T) => void) & { cancel?(): void } {
     let t: ReturnType<typeof setTimeout> | undefined
     const wrapped = (...args: T): void => {
@@ -126,6 +273,11 @@ export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
   useEffect(() => {
     let destroyed = false
     let rel: Rendition | null = null
+    const onRelocateDebounced = debounceCb((pct: number, cfi: string) => {
+      onRelocateRef.current(pct, cfi)
+    }, 600)
+    onRelocateDebouncedRef.current = onRelocateDebounced
+
     void (async () => {
       try {
         const url = await window.api.fileUrl(book.id)
@@ -147,26 +299,63 @@ export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
         registerThemeHook(rel)
         applyAllThemes(rel, settings)
 
+        // أحداث داخل iframe: مفاتيح الأسهم + عجلة الفأرة (لا تصل للنافذة الأم أصلًا)
+        rel.hooks.content.register((contents: { document: Document }) => {
+          try {
+            const doc = contents.document
+            doc.addEventListener(
+              'wheel',
+              (e) => wheelFlip(e as WheelEvent),
+              { passive: false }
+            )
+            doc.addEventListener('keydown', (e) => {
+              const keys = ['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', ' ']
+              if (keys.includes(e.key)) {
+                e.preventDefault()
+                keyNav(e.key)
+              }
+            })
+          } catch {
+            /* ignore */
+          }
+        })
+
         // استئناف آخر موضع
-        const target = book.lastLocation && book.lastLocation.startsWith('epubcfi') ? book.lastLocation : undefined
-        await rel.display(target ?? undefined)
+        const target = lastCfiRef.current ?? undefined
+        await rel.display(target)
 
         // الفهرس
         const nav = (await epubBook.loaded.navigation) as { toc: NavItem[] }
         const toc = flattenNav(nav.toc ?? [])
 
         const handle: EpubHandle = {
-          next: () => void rel?.next(),
-          prev: () => void rel?.prev(),
+          next: () => nextRef.current(),
+          prev: () => prevRef.current(),
           goToCfi: (cfi) => void rel?.display(cfi),
           goToHref: (href) => void rel?.display(href),
           displayAtPercent: (p) => {
             const b = bookRef.current
-            if (!b || !b.locations || b.locations.length() === 0) return
-            const total = b.locations.length()
-            const idx = Math.round((clamp(p, 0, 100) / 100) * total)
-            const cfi = (b.locations as unknown as { [i: number]: string })[idx === 0 ? 0 : Math.min(idx - 1, total - 1)]
-            if (cfi) void rel?.display(cfi)
+            const target = clamp(p, 0, 100)
+            if (!b || !rel) return
+            if (flowRef.current === 'scrolled') {
+              const el = scrollerEl()
+              if (el) {
+                const max = el.scrollHeight - el.clientHeight
+                if (max > 0) el.scrollTo({ top: (target / 100) * max, behavior: 'auto' })
+              }
+              return
+            }
+            try {
+              if (b.locations && b.locations.length() > 0) {
+                const cfi = b.locations.cfiFromPercentage(target / 100)
+                if (cfi) void rel.display(cfi)
+              } else {
+                // المواقع لم تُحسب بعد — نؤجل القفزة حتى يكتمل الحساب
+                pendingPercentRef.current = target
+              }
+            } catch {
+              /* ignore */
+            }
           },
           applySettings: (s) => {
             if (!rel) return
@@ -177,12 +366,58 @@ export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
         }
 
         // الأحداث
-        rel.on('relocated', (location: { start: { cfi: string; percentage?: number; href?: string }; end: unknown }) => {
-          const pct = Math.round((location.start.percentage ?? 0) * 10000) / 100
-          lastCfiRef.current = location.start.cfi
-          setProgress(pct)
-          onRelocateDebounced(pct, location.start.cfi)
-        })
+        rel.on(
+          'relocated',
+          (location: {
+            start: { cfi: string; percentage?: number; index?: number; href?: string }
+            end: unknown
+          }) => {
+            const start = location?.start
+            if (!start?.cfi) return
+            lastCfiRef.current = start.cfi
+            if (typeof start.index === 'number') {
+              lastSpineIndexRef.current = start.index
+            } else {
+              const idx = spineIndexOf(start.cfi)
+              if (idx != null) lastSpineIndexRef.current = idx
+            }
+
+            // في وضع التمرير: النسبة تُحسب من موضع التمرير الحالي
+            if (flowRef.current === 'scrolled') {
+              reportScrollRef.current(false)
+              return
+            }
+
+            // وضع الصفحات: نسبة دقيقة من المواقع إن توفرت، وإلا تقدير من موضع القسم
+            let pct: number | null = null
+            const b = bookRef.current
+            if (typeof start.percentage === 'number' && start.percentage > 0) {
+              pct = start.percentage * 100
+            } else if (b) {
+              try {
+                if (b.locations && b.locations.length() > 0) {
+                  const p = b.locations.percentageFromCfi(start.cfi)
+                  if (typeof p === 'number' && p > 0) pct = p * 100
+                }
+              } catch {
+                /* ignore */
+              }
+            }
+            if (pct == null) {
+              const total = spineCount()
+              if (total > 1) {
+                const idx = typeof start.index === 'number' ? start.index : lastSpineIndexRef.current
+                pct = clamp(((idx + 0.5) / total) * 100, 0, 100)
+              } else {
+                // كتاب بقسم واحد — لا نتراجع عن آخر نسبة معروفة
+                pct = lastPctRef.current
+              }
+            }
+            lastPctRef.current = pct
+            setProgress(pct)
+            onRelocateDebounced(pct, start.cfi)
+          }
+        )
 
         rel.on('selected', (cfiRange: string, contents: Contents) => {
           handleEpubSelection(cfiRange, contents)
@@ -196,21 +431,42 @@ export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
         }
 
         setReady(true)
-        onDocReady({ toc, handle, percent: 0 })
+        onDocReady({ toc, handle, percent: lastPctRef.current })
 
         // حساب المواقع للتقدم الدقيق (في الخلفية)
         void epubBook.ready
           .then(() => epubBook.locations.generate(1200))
+          .then(() => {
+            if (destroyed) return
+            // تنفيذ أي قفزة نسبة مؤجلة بانتظار حساب المواقع
+            const pending = pendingPercentRef.current
+            if (pending != null) {
+              pendingPercentRef.current = null
+              handle.displayAtPercent(pending)
+            }
+            // تحديث النسبة الحالية بدقة بعد اكتمال المواقع
+            if (flowRef.current !== 'scrolled') {
+              const cfi = lastCfiRef.current
+              if (cfi) {
+                try {
+                  const p = epubBook.locations.percentageFromCfi(cfi)
+                  if (typeof p === 'number' && p > 0) {
+                    lastPctRef.current = p * 100
+                    setProgress(p * 100)
+                    onRelocateDebounced(p * 100, cfi)
+                  }
+                } catch {
+                  /* ignore */
+                }
+              }
+            }
+          })
           .catch(() => undefined)
       } catch (e) {
         console.error('epub load failed:', e, (e as Error)?.stack)
         if (!destroyed) setFailed(true)
       }
     })()
-
-    const onRelocateDebounced = debounceCb((pct: number, cfi: string) => {
-      onRelocate(pct, cfi)
-    }, 600)
 
     return () => {
       destroyed = true
@@ -230,6 +486,35 @@ export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // مستمع التمرير لوضع scrolled — تحديث النسبة أثناء التمرير
+  useEffect(() => {
+    if (!ready) return
+    const el = scrollerEl()
+    if (!el) return
+    let raf = 0
+    const onScroll = (): void => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        if (flowRef.current === 'scrolled') reportScrollRef.current(false)
+      })
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [ready, scrollerEl])
+
+  // عجلة الفأرة على حاوية التطبيق (المنطقة حول iframe) في وضع الصفحات
+  useEffect(() => {
+    const el = viewerRef.current
+    if (!el) return
+    const handler = wheelFlip as unknown as EventListener
+    el.addEventListener('wheel', handler, { passive: false })
+    return () => el.removeEventListener('wheel', handler)
+  }, [wheelFlip])
 
   // ---------- التحديد داخل iframe ----------
   const handleEpubSelection = useCallback(
@@ -331,8 +616,7 @@ export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
     prevAnnsRef.current = reader.annotations.map((a) => ({ id: a.id, cfi: a.cfi, type: a.type }))
   }, [reader.annotations, ready])
 
-  // تطبيق تغييرات الإعدادات فورًا
-  const flowRef = useRef(settings.flow)
+  // تطبيق تغييرات الإعدادات فورًا + تبديل وضع العرض عبر rel.flow() الرسمي
   useEffect(() => {
     const rel = renditionRef.current
     if (!rel || !ready) return
@@ -341,15 +625,17 @@ export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
     if (settings.flow !== flowRef.current) {
       flowRef.current = settings.flow
       try {
-        ;(rel.book.settings as unknown as { flow: string }).flow =
-          settings.flow === 'scrolled' ? 'scrolled-doc' : 'paginated'
+        // epub.js يوفر تبديلًا رسميًا للوضع: يعدّل المحور و overflow الحاوية
+        rel.flow(settings.flow === 'scrolled' ? 'scrolled-doc' : 'paginated')
         void rel.display(lastCfiRef.current ?? undefined)
-      } catch {
-        /* ignore */
+      } catch (e) {
+        console.warn('flow switch failed', e)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings, ready])
+
+  const isScrolled = settings.flow === 'scrolled'
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[#e9e7e2] dark:bg-[#101216]">
@@ -359,7 +645,21 @@ export function EpubReader({ book, settings, onDocReady, onRelocate }: Props) {
           <p className="text-sm opacity-60">قد يكون الملف تالفًا</p>
         </div>
       ) : (
-        <div ref={viewerRef} className="h-full w-full" />
+        /* الهوامش تُطبق هنا — تعمل بشكل صحيح في الوضعين معًا */
+        <div
+          className="h-full w-full"
+          style={{
+            paddingTop: `${Math.max(0, settings.marginTop)}%`,
+            paddingBottom: `${Math.max(0, settings.marginBottom)}%`,
+            paddingLeft: `${Math.max(0, settings.marginLeft)}%`,
+            paddingRight: `${Math.max(0, settings.marginRight)}%`
+          }}
+        >
+          <div
+            ref={viewerRef}
+            className={isScrolled ? 'h-full w-full overflow-y-auto' : 'h-full w-full overflow-hidden'}
+          />
+        </div>
       )}
     </div>
   )
@@ -421,5 +721,3 @@ export function fontFamilyStack(id: string): string {
       return "'Segoe UI', Arial, sans-serif"
   }
 }
-
-void READER_FONTS

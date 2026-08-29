@@ -230,63 +230,107 @@ export function removeBookFiles(fileName: string, coverPath: string | null): voi
 export async function searchCoverUrl(title: string, author?: string | null): Promise<string | null> {
   const q = [title, author].filter(Boolean).join(' ').trim()
   if (!q) return null
+
+  // 1) Google Books
   try {
-    // 1) Google Books
     const gb = await fetchJson(
-      `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=5&country=EG`
+      `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8`,
+      12000
     )
     const items: unknown[] = (gb as { items?: unknown[] })?.items ?? []
+    let fallbackLink: string | null = null
     for (const it of items) {
-      const vi = (it as { volumeInfo?: { imageLinks?: Record<string, string>; title?: string; authors?: string[] } }).volumeInfo
+      const vi = (it as {
+        volumeInfo?: {
+          imageLinks?: Record<string, string>
+          title?: string
+          authors?: string[]
+        }
+      }).volumeInfo
       if (!vi) continue
       const link =
-        vi.imageLinks?.thumbnail ||
-        vi.imageLinks?.smallThumbnail ||
+        vi.imageLinks?.extraLarge ||
+        vi.imageLinks?.large ||
         vi.imageLinks?.medium ||
-        vi.imageLinks?.large
-      if (link) return link.replace('http://', 'https://').replace('&edge=curl', '').replace('zoom=1', 'zoom=3')
+        vi.imageLinks?.thumbnail ||
+        vi.imageLinks?.smallThumbnail
+      if (!link) continue
+      // تفضيل تطابق العنوان/المؤلف، وإلا خذ أول نتيجة ذات صورة
+      const titleOk = vi.title && norm(vi.title).includes(norm(title).slice(0, 12))
+      const authorOk = !author || vi.authors?.some((a) => norm(a).includes(norm(author).split(' ')[0]))
+      if (titleOk && authorOk) return upgradeGoogleImage(link)
+      if (!fallbackLink) fallbackLink = link
     }
+    if (fallbackLink) return upgradeGoogleImage(fallbackLink)
   } catch {
     /* تجاهل والانتقال لـ Open Library */
   }
+
+  // 2) Open Library (حسب العنوان ثم المؤلف)
   try {
-    // 2) Open Library (حسب العنوان)
-    const ol = await fetchJson(`https://openlibrary.org/search.json?title=${encodeURIComponent(title)}&limit=5`)
+    const ol = await fetchJson(
+      `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}${author ? `&author=${encodeURIComponent(author)}` : ''}&limit=8&fields=cover_i,title,author_name`,
+      12000
+    )
     const docs: Array<{ cover_i?: number; title?: string; author_name?: string[] }> =
       (ol as { docs?: Array<{ cover_i?: number }> })?.docs ?? []
-    let best: number | null = null
-    for (const d of docs) {
-      if (d.cover_i && typeof d.cover_i === 'number') {
-        // تفضيل التطابق في المؤلف إن وُجد
-        if (author && d.author_name?.some((a) => a.toLowerCase().includes(String(author).toLowerCase().split(' ')[0]))) {
-          best = d.cover_i
-          break
-        }
-        if (best == null) best = d.cover_i
+    const withCover = docs.filter((d) => d.cover_i && typeof d.cover_i === 'number')
+    if (withCover.length) {
+      // تفضيل التطابق في المؤلف إن وُجد
+      let best = withCover[0]
+      if (author) {
+        const a = norm(author).split(' ')[0]
+        const matched = withCover.find((d) => d.author_name?.some((x) => norm(x).includes(a)))
+        if (matched) best = matched
       }
+      return `https://covers.openlibrary.org/b/id/${best.cover_i}-L.jpg`
     }
-    if (best != null) return `https://covers.openlibrary.org/b/id/${best}-L.jpg`
   } catch {
     /* تجاهل */
   }
   return null
 }
 
+function norm(s: string): string {
+  return s
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .toLowerCase()
+    .trim()
+}
+
+/** رفع دقة صورة Google Books إلى أكبر مقاس متاح */
+function upgradeGoogleImage(link: string): string {
+  return link
+    .replace('http://', 'https://')
+    .replace('&edge=curl', '')
+    .replace('zoom=1', 'zoom=3')
+}
+
 /** تنزيل صورة من رابط إلى Buffer */
 export async function downloadImage(url: string): Promise<Buffer | null> {
   try {
-    const res = await net.fetch(url, { headers: { 'User-Agent': 'Maktaba/1.0' } })
+    const res = await net.fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 Maktaba/1.0' },
+      signal: AbortSignal.timeout(15000)
+    })
     if (!res.ok) return null
     const buf = Buffer.from(await res.arrayBuffer())
-    if (buf.length < 500) return null // صورة تالفة/فارغة
+    // openlibrary يرجع صورة 1×1 فارغة عند عدم وجود غلاف
+    if (buf.length < 800) return null
     return buf
   } catch {
     return null
   }
 }
 
-async function fetchJson(url: string): Promise<unknown> {
-  const res = await net.fetch(url, { headers: { 'User-Agent': 'Maktaba/1.0' } })
+async function fetchJson(url: string, timeoutMs = 12000): Promise<unknown> {
+  const res = await net.fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 Maktaba/1.0' },
+    signal: AbortSignal.timeout(timeoutMs)
+  })
   if (!res.ok) throw new Error(`status ${res.status}`)
   return res.json()
 }

@@ -59,3 +59,20 @@ export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: numb
     timer = setTimeout(() => fn(...args), ms)
   }
 }
+
+/**
+ * تحويل مسار الغلاف المحلي إلى رابط بروتوكول cover:// الذي تسمح به CSP
+ * (روابط file:// محظورة داخل الواجهة فلا تظهر الأغلفة أصلًا)
+ */
+export function coverUrl(coverPath: string | null | undefined, bust = false): string | null {
+  if (!coverPath) return null
+  const base = coverPath.split(/[\\/]/).pop()
+  if (!base) return null
+  return `cover://img/${encodeURIComponent(base)}${bust ? `?t=${Date.now()}` : ''}`
+}
+
+/** هل لغة الكتاب تُقرأ من اليمين لليسار (يحدد اتجاه التنقل بالأسهم والأزرار) */
+export function isRtlLang(lang: string | null | undefined): boolean {
+  const l = (lang || 'ar').toLowerCase().trim()
+  return ['ar', 'he', 'fa', 'ur', 'ps', 'sd'].some((p) => l === p || l.startsWith(`${p}-`) || l.startsWith(`${p}_`))
+}

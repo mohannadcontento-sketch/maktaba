@@ -6,7 +6,7 @@ import { useLibrary } from '@/stores/library'
 import { useUi } from '@/stores/ui'
 import { Dialog } from '@/components/ui/Dialog'
 import { Button, Input, Textarea, StarRating } from '@/components/ui/kit'
-import { cn } from '@/lib/utils'
+import { cn, coverUrl } from '@/lib/utils'
 
 const TAG_COLORS = ['#0d9488', '#f59e0b', '#3b82f6', '#ef4444', '#a855f7', '#ec4899']
 
@@ -27,6 +27,7 @@ export function MetadataDialog({ book, open, onClose }: { book: Book; open: bool
   const [newTag, setNewTag] = useState('')
   const [coverFetching, setCoverFetching] = useState(false)
   const [coverPreview, setCoverPreview] = useState<string | null>(book.coverPath)
+  const [coverBust, setCoverBust] = useState(0)
 
   useEffect(() => {
     if (open && book) {
@@ -41,6 +42,7 @@ export function MetadataDialog({ book, open, onClose }: { book: Book; open: bool
       })
       setSelectedTags(book.tags.map((tg) => tg.id))
       setCoverPreview(book.coverPath)
+      setCoverBust(0)
     }
   }, [open, book])
 
@@ -81,6 +83,7 @@ export function MetadataDialog({ book, open, onClose }: { book: Book; open: bool
       )
       if (fresh?.coverPath) {
         setCoverPreview(fresh.coverPath)
+        setCoverBust((b) => b + 1)
         ui.toast(t('library.coverFetched'), 'success')
         await lib.reloadOne(book.id)
       } else {
@@ -118,7 +121,7 @@ export function MetadataDialog({ book, open, onClose }: { book: Book; open: bool
       <div className="mb-4 flex items-center gap-4 rounded-2xl border border-line bg-surface2/50 p-3 dark:border-dline dark:bg-dsurface2/40">
         <div className="relative h-32 w-22 shrink-0 overflow-hidden rounded-xl shadow-md ring-1 ring-black/10">
           {coverPreview ? (
-            <img src={`file://${coverPreview.replace(/\\/g, '/')}`} alt={book.title} className="h-full w-full object-cover" />
+            <img src={coverUrl(coverPreview, coverBust > 0) ?? undefined} alt={book.title} className="h-full w-full object-cover" />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-teal-600/20 to-emerald-600/20 text-muted">
               <ImageDown size={26} />

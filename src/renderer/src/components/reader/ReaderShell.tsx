@@ -14,13 +14,14 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCw,
+  RotateCcw,
   Printer,
   Type,
   ChevronLeft,
   ChevronRight
 } from 'lucide-react'
 import { useUi } from '@/stores/ui'
-import { useReader, READER_FONTS, READER_ALIGNS, type ReaderSettings } from '@/stores/reader'
+import { useReader, DEFAULT_READER_SETTINGS, READER_FONTS, READER_ALIGNS, type ReaderSettings } from '@/stores/reader'
 import type { Book } from '../../../../shared/types'
 import type { PdfHandle } from './PdfReader'
 import type { TocItem } from '@/lib/pdfEngine'
@@ -34,7 +35,7 @@ import { NoteEditor } from './NoteEditor'
 import { WindowControls } from '@/components/layout/Chrome'
 import { IconButton } from '@/components/ui/IconButton'
 import { Button, Slider, Select } from '@/components/ui/kit'
-import { cn } from '@/lib/utils'
+import { cn, isRtlLang } from '@/lib/utils'
 
 type ReaderToc = TocItem[] | TocEntry[]
 
@@ -61,20 +62,11 @@ export function ReaderShell({ book }: { book: Book }) {
   const [isBookmarked, setIsBookmarked] = useState(false)
   const [remainingMin, setRemainingMin] = useState<number | null>(null)
 
+  // اتجاه التنقل حسب لغة الكتاب (عربي/عبري/فارسي... = يمين إلى يسار)
+  const epubRtl = isRtlLang(book.language)
+
   // إعدادات القراءة محفوظة لكل التطبيق
-  const [settings, setSettings] = useState<ReaderSettings>({
-    theme: 'day',
-    fontFamily: 'arabic-serif',
-    fontSize: 100,
-    lineHeight: 1.7,
-    margin: 6,
-    align: 'justify',
-    marginLeft: 6,
-    marginRight: 6,
-    marginTop: 4,
-    marginBottom: 4,
-    flow: 'paginated'
-  })
+  const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_READER_SETTINGS)
 
   // تحميل الإعدادات المحفوظة مرة واحدة
   useEffect(() => {
@@ -107,18 +99,23 @@ export function ReaderShell({ book }: { book: Book }) {
 
   // ---------- جاهزية المحرك ----------
   const epubHandleRef = useRef<EpubHandle | null>(null)
+  // آخر موقع معروف في EPUB — يُمرر للقارئ عند إعادة الفتح
+  const epubCfiRef = useRef<string | null>(book.lastLocation ?? null)
 
   const onPdfReady = useCallback(({ toc: tocItems, handle }: { toc: TocItem[]; handle: PdfHandle }): void => {
     setToc(tocItems)
     setEngine((prev) => ({ ...prev, pdf: handle }))
     setTotalPages(handle.numPages())
     setCurrentPage(handle.currentPage())
-  }, [])
+    // استعادة شريط التقدم من المحفوظ بدلًا من الظهور عند صفر
+    setPercent(Math.min(99.9, book.progress || 0))
+  }, [book.progress])
 
   const onEpubReady = useCallback(({ toc: tocItems, handle }: { toc: TocEntry[]; handle: EpubHandle; percent: number }): void => {
     epubHandleRef.current = handle
     setToc(tocItems)
     setEngine((prev) => ({ ...prev, epub: handle }))
+    if (percent > 0) setPercent(percent)
   }, [])
 
   const onEpdfPageChange = useCallback((p: number): void => {
@@ -129,6 +126,7 @@ export function ReaderShell({ book }: { book: Book }) {
   }, [engine])
 
   const onEpubRelocate = useCallback((pct: number, cfi: string): void => {
+    epubCfiRef.current = cfi
     setPercent(pct)
     void reader.saveProgress(pct, cfi)
     // وقت متبقٍ تقريبي
@@ -182,12 +180,23 @@ export function ReaderShell({ book }: { book: Book }) {
       }
       switch (e.key) {
         case 'ArrowRight':
+          e.preventDefault()
+          // في الكتب العربية (RTL) السهم اليمين يعود للخلف، وفي PDF يتقدم للأمام
+          if (isPdf) engine.pdf?.nextPage()
+          else if (epubRtl) engine.epub?.prev()
+          else engine.epub?.next()
+          break
+        case 'ArrowLeft':
+          e.preventDefault()
+          if (isPdf) engine.pdf?.prevPage()
+          else if (epubRtl) engine.epub?.next()
+          else engine.epub?.prev()
+          break
         case 'ArrowDown':
         case 'PageDown':
           e.preventDefault()
           isPdf ? engine.pdf?.nextPage() : engine.epub?.next()
           break
-        case 'ArrowLeft':
         case 'ArrowUp':
         case 'PageUp':
           e.preventDefault()
@@ -304,14 +313,18 @@ export function ReaderShell({ book }: { book: Book }) {
                 onChange={(e) => {
                   const v = Number(e.target.value)
                   setPercent(v)
-                  if (isPdf) engine.pdf?.scrollToPercent(v)
-                  else engine.epub?.displayAtPercent(v)
+                  if (isPdf) engine.pdf?.scrollToPercent(v, false)
+                  // في EPUB نؤجل القفزة حتى نهاية السحب لأن كل قفزة تعيد رسم الصفحة
                 }}
                 onMouseUp={(e) => {
-                  if (isPdf) {
-                    const v = Number((e.target as HTMLInputElement).value)
-                    engine.pdf?.scrollToPercent(v)
-                  }
+                  const v = Number((e.target as HTMLInputElement).value)
+                  if (isPdf) engine.pdf?.scrollToPercent(v, true)
+                  else engine.epub?.displayAtPercent(v)
+                }}
+                onTouchEnd={(e) => {
+                  const v = Number((e.target as HTMLInputElement).value)
+                  if (isPdf) engine.pdf?.scrollToPercent(v, true)
+                  else engine.epub?.displayAtPercent(v)
                 }}
                 className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-gray-300 dark:bg-dline [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent dark:[&::-webkit-slider-thumb]:bg-daccent"
               />
@@ -380,7 +393,13 @@ export function ReaderShell({ book }: { book: Book }) {
           {isPdf ? (
             <PdfReader book={book} onDocReady={onPdfReady} onPageChange={onEpdfPageChange} />
           ) : (
-            <EpubReader book={book} settings={settings} onDocReady={onEpubReady} onRelocate={onEpubRelocate} />
+            <EpubReader
+              book={book}
+              settings={settings}
+              resumeCfi={epubCfiRef.current}
+              onDocReady={onEpubReady}
+              onRelocate={onEpubRelocate}
+            />
           )}
 
           <SearchBar isPdf={isPdf} />
@@ -394,22 +413,22 @@ export function ReaderShell({ book }: { book: Book }) {
             />
           )}
 
-          {/* أزرار تنقل جانبية للـ EPUB */}
+          {/* أزرار تنقل جانبية للـ EPUB — الاتجاه يتبع لغة الكتاب */}
           {!isPdf && !reader.selection && (
             <>
               <button
                 className="absolute start-0 top-0 z-10 flex h-full w-10 items-center justify-start ps-1 opacity-30 transition-opacity hover:opacity-90"
-                onClick={() => engine.epub?.next()}
-                title="التالي"
+                onClick={() => (epubRtl ? engine.epub?.prev() : engine.epub?.next())}
+                title={epubRtl ? 'السابق' : 'التالي'}
               >
-                <ChevronLeft size={26} />
+                {epubRtl ? <ChevronRight size={26} /> : <ChevronLeft size={26} />}
               </button>
               <button
                 className="absolute end-0 top-0 z-10 flex h-full w-10 items-center justify-end pe-1 opacity-30 transition-opacity hover:opacity-90"
-                onClick={() => engine.epub?.prev()}
-                title="السابق"
+                onClick={() => (epubRtl ? engine.epub?.next() : engine.epub?.prev())}
+                title={epubRtl ? 'التالي' : 'السابق'}
               >
-                <ChevronRight size={26} />
+                {epubRtl ? <ChevronLeft size={26} /> : <ChevronRight size={26} />}
               </button>
             </>
           )}
@@ -453,9 +472,20 @@ function DisplayOptionsDrawer({
     <div className="absolute end-3 top-3 z-40 anim-in w-72 rounded-2xl border border-line bg-surface p-4 shadow-2xl dark:border-dline dark:bg-dsurface2">
       <div className="mb-3 flex items-center justify-between">
         <p className="text-sm font-bold">{t('reader.displayOptions')}</p>
-        <button onClick={onClose} className="text-muted hover:text-ink">
-          ✕
-        </button>
+        <div className="flex items-center gap-2">
+          {/* زر إعادة الضبط للإعدادات الافتراضية */}
+          <button
+            onClick={() => onChange({ ...DEFAULT_READER_SETTINGS })}
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-muted transition-colors hover:bg-black/5 hover:text-ink dark:hover:bg-white/10"
+            title={t('reader.resetDefaults')}
+          >
+            <RotateCcw size={12} />
+            {t('reader.resetDefaults')}
+          </button>
+          <button onClick={onClose} className="text-muted hover:text-ink">
+            ✕
+          </button>
+        </div>
       </div>
 
       <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">{t('reader.themeLabel')}</p>

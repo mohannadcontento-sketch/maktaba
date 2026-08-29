@@ -131,6 +131,7 @@ export const ar = {
     fitPage: 'ملاءمة الصفحة',
     actualSize: 'الحجم الفعلي',
     displayOptions: 'خيارات العرض',
+    resetDefaults: 'استعادة الافتراضي',
     fontFamily: 'نوع الخط',
     fontSize: 'حجم الخط',
     lineHeight: 'تباعد الأسطر',

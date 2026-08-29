@@ -16,6 +16,21 @@ export interface ReaderSettings {
   flow: FlowMode
 }
 
+/** الإعدادات الافتراضية — مصدر واحد يُستخدم للتهيئة ولزر إعادة الضبط */
+export const DEFAULT_READER_SETTINGS: ReaderSettings = {
+  theme: 'day',
+  fontFamily: 'arabic-serif',
+  fontSize: 100,
+  lineHeight: 1.7,
+  margin: 6,
+  align: 'justify',
+  marginLeft: 6,
+  marginRight: 6,
+  marginTop: 4,
+  marginBottom: 4,
+  flow: 'paginated'
+}
+
 export const READER_FONTS = [
   { id: 'arabic-serif', label: 'أميري (نسخ)' },
   { id: 'arabic-sans', label: 'كايرو' },

@@ -41,7 +41,7 @@ export interface PdfHandle {
   runSearch(q: string): Promise<void>
   currentPage(): number
   numPages(): number
-  scrollToPercent(p: number): void
+  scrollToPercent(p: number, smooth?: boolean): void
   percent(): number
 }
 
@@ -276,11 +276,11 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
           runSearch: (q) => runSearch(q),
           currentPage: () => curPageRef.current,
           numPages: () => numPagesRef.current,
-          scrollToPercent: (p) => {
+          scrollToPercent: (p, smooth = true) => {
             const el = containerRef.current
             if (!el) return
             const max = el.scrollHeight - el.clientHeight
-            el.scrollTo({ top: Math.max(0, (clamp(p, 0, 100) / 100) * max), behavior: 'smooth' })
+            el.scrollTo({ top: Math.max(0, (clamp(p, 0, 100) / 100) * max), behavior: smooth ? 'smooth' : 'auto' })
           },
           percent: () => {
             const el = containerRef.current
@@ -396,7 +396,8 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
   function scheduleProgressSave(p: number): void {
     clearTimeout(progressTimer.current)
     progressTimer.current = setTimeout(() => {
-      const progress = ((p - 1) / Math.max(1, numPages)) * 100
+      // التقدم = الصفحة الحالية / إجمالي الصفحات (تصل 100% عند آخر صفحة)
+      const progress = (p / Math.max(1, numPages)) * 100
       void reader.saveProgress(progress, String(p), p >= numPages)
     }, 800)
   }

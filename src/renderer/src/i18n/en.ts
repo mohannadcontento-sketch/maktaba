@@ -133,6 +133,7 @@ export const en: Dict = {
     fitPage: 'Fit page',
     actualSize: 'Actual size',
     displayOptions: 'Display options',
+    resetDefaults: 'Reset to defaults',
     fontFamily: 'Font family',
     fontSize: 'Font size',
     lineHeight: 'Line height',
