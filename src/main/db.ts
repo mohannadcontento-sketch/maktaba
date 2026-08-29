@@ -545,3 +545,193 @@ export function setSetting(key: string, value: string): void {
     value
   )
 }
+
+// ---------- النسخ الاحتياطي (النسخة 2) ----------
+
+export interface BackupData {
+  app: 'maktaba'
+  schemaVersion: number
+  exportedAt: number
+  books: Record<string, unknown>[]
+  tags: { id: number; name: string; color: string }[]
+  book_tags: { book_id: string; tag_id: number }[]
+  collections: { id: number; name: string; created_at: number }[]
+  collection_books: { collection_id: number; book_id: string }[]
+  annotations: Record<string, unknown>[]
+  bookmarks: Record<string, unknown>[]
+  settings: { key: string; value: string }[]
+}
+
+export interface ImportBackupResult {
+  booksAdded: number
+  booksSkipped: number
+  tagsAdded: number
+  collectionsAdded: number
+  annotationsAdded: number
+  bookmarksAdded: number
+}
+
+export function exportAllData(): BackupData {
+  return {
+    app: 'maktaba',
+    schemaVersion: 1,
+    exportedAt: Date.now(),
+    books: db.prepare('SELECT * FROM books').all() as Record<string, unknown>[],
+    tags: db.prepare('SELECT * FROM tags').all() as BackupData['tags'],
+    book_tags: db.prepare('SELECT * FROM book_tags').all() as BackupData['book_tags'],
+    collections: db.prepare('SELECT * FROM collections').all() as BackupData['collections'],
+    collection_books: db.prepare('SELECT * FROM collection_books').all() as BackupData['collection_books'],
+    annotations: db.prepare('SELECT * FROM annotations').all() as Record<string, unknown>[],
+    bookmarks: db.prepare('SELECT * FROM bookmarks').all() as Record<string, unknown>[],
+    settings: db.prepare('SELECT * FROM settings').all() as BackupData['settings']
+  }
+}
+
+const BOOK_COLS = [
+  'id',
+  'title',
+  'author',
+  'format',
+  'file_name',
+  'original_path',
+  'cover_path',
+  'size',
+  'page_count',
+  'language',
+  'publisher',
+  'pub_date',
+  'description',
+  'rating',
+  'status',
+  'progress',
+  'last_location',
+  'last_read_at',
+  'added_at',
+  'favorite'
+] as const
+
+export function importAllData(data: BackupData): ImportBackupResult {
+  const result: ImportBackupResult = {
+    booksAdded: 0,
+    booksSkipped: 0,
+    tagsAdded: 0,
+    collectionsAdded: 0,
+    annotationsAdded: 0,
+    bookmarksAdded: 0
+  }
+
+  const tx = db.transaction(() => {
+    const coversLocal = coversDirLocal()
+
+    // 1) الكتب — نحافظ على المعرفات نفسها، ونعيد توجيه مسارات الأغلفة محليًا
+    const insertBook = db.prepare(
+      `INSERT OR IGNORE INTO books (${BOOK_COLS.join(', ')})
+       VALUES (${BOOK_COLS.map(() => '?').join(', ')})`
+    )
+    const existing = db.prepare('SELECT id FROM books WHERE id = ?')
+    for (const row of data.books ?? []) {
+      const id = String(row['id'] ?? '')
+      if (!id) continue
+      if (existing.get(id)) {
+        result.booksSkipped++
+        continue
+      }
+      const coverRaw = row['cover_path']
+      const coverBase = typeof coverRaw === 'string' ? path.basename(coverRaw) : ''
+      const coverLocal = coverBase ? path.join(coversLocal, coverBase) : null
+      insertBook.run(
+        ...BOOK_COLS.map((c) =>
+          c === 'cover_path' ? (coverLocal && fs.existsSync(coverLocal) ? coverLocal : null) : row[c] ?? null
+        )
+      )
+      result.booksAdded++
+    }
+
+    // 2) الوسوم — إعادة التعيين حسب الاسم مع خريطة هوام جديدة
+    const tagMap = new Map<number, number>()
+    const findTag = db.prepare('SELECT id FROM tags WHERE name = ?')
+    const insertTag = db.prepare('INSERT INTO tags (name, color) VALUES (?, ?)')
+    for (const t of data.tags ?? []) {
+      if (!t?.name) continue
+      const found = findTag.get(t.name) as { id: number } | undefined
+      if (found) {
+        tagMap.set(t.id, found.id)
+      } else {
+        const info = insertTag.run(t.name, t.color ?? '#0d9488')
+        tagMap.set(t.id, Number(info.lastInsertRowid))
+        result.tagsAdded++
+      }
+    }
+    const insBT = db.prepare('INSERT OR IGNORE INTO book_tags (book_id, tag_id) VALUES (?, ?)')
+    for (const bt of data.book_tags ?? []) {
+      const newId = tagMap.get(bt?.tag_id)
+      if (newId && bt.book_id) insBT.run(bt.book_id, newId)
+    }
+
+    // 3) المجموعات — إعادة التعيين حسب الاسم
+    const colMap = new Map<number, number>()
+    const findCol = db.prepare('SELECT id FROM collections WHERE name = ?')
+    const insertCol = db.prepare('INSERT INTO collections (name, created_at) VALUES (?, ?)')
+    for (const c of data.collections ?? []) {
+      if (!c?.name) continue
+      const found = findCol.get(c.name) as { id: number } | undefined
+      if (found) {
+        colMap.set(c.id, found.id)
+      } else {
+        const info = insertCol.run(c.name, c.created_at ?? Date.now())
+        colMap.set(c.id, Number(info.lastInsertRowid))
+        result.collectionsAdded++
+      }
+    }
+    const insCB = db.prepare('INSERT OR IGNORE INTO collection_books (collection_id, book_id) VALUES (?, ?)')
+    for (const cb of data.collection_books ?? []) {
+      const newId = colMap.get(cb?.collection_id)
+      if (newId && cb.book_id) insCB.run(newId, cb.book_id)
+    }
+
+    // 4) التعليقات والعلامات — فقط إذا كان الكتاب موجودًا محليًا
+    const insAnn = db.prepare(
+      `INSERT OR IGNORE INTO annotations (id, book_id, type, color, page, cfi, rects, text, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    for (const a of data.annotations ?? []) {
+      if (!a['id'] || !a['book_id']) continue
+      if (!existing.get(String(a['book_id']))) continue
+      const info = insAnn.run(
+        a['id'], a['book_id'], a['type'] ?? 'highlight', a['color'] ?? '#f59e0b',
+        a['page'] ?? null, a['cfi'] ?? null, a['rects'] ?? null, a['text'] ?? null,
+        a['note'] ?? '', a['created_at'] ?? Date.now(), a['updated_at'] ?? Date.now()
+      )
+      if (info.changes > 0) result.annotationsAdded++
+    }
+    const insBm = db.prepare(
+      `INSERT OR IGNORE INTO bookmarks (id, book_id, label, location, page, excerpt, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    for (const b of data.bookmarks ?? []) {
+      if (!b['id'] || !b['book_id']) continue
+      if (!existing.get(String(b['book_id']))) continue
+      const info = insBm.run(
+        b['id'], b['book_id'], b['label'] ?? '', b['location'] ?? '',
+        b['page'] ?? null, b['excerpt'] ?? null, b['created_at'] ?? Date.now()
+      )
+      if (info.changes > 0) result.bookmarksAdded++
+    }
+
+    // 5) الإعدادات — تُستعاد كما هي (استعادة كاملة)
+    const insSet = db.prepare(
+      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+    )
+    for (const s of data.settings ?? []) {
+      if (!s?.key) continue
+      insSet.run(s.key, s.value ?? '')
+    }
+  })
+  tx()
+  return result
+}
+
+/** مجلد الأغلفة للاستخدام داخل importAllData (يُستدعى بعد initDb) */
+function coversDirLocal(): string {
+  return path.join(app.getPath('userData'), 'covers')
+}

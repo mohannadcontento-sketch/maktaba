@@ -81,6 +81,9 @@ const api: ApiBridge = {
   printPage: () => ipcRenderer.send('print:current'),
   openDataFolder: () => ipcRenderer.invoke('app:openDataFolder'),
   exportAnnotations: (bookId) => ipcRenderer.invoke('annotations:export', bookId),
+  // النسخ الاحتياطي (النسخة 2)
+  exportBackup: (includeFiles) => ipcRenderer.invoke('backup:export', includeFiles),
+  importBackup: () => ipcRenderer.invoke('backup:import'),
   platform: process.platform
 }
 

@@ -14,6 +14,7 @@ import { useReader } from '@/stores/reader'
 import type { TocItem } from '@/lib/pdfEngine'
 import type { TocEntry } from './EpubReader'
 import { cn } from '@/lib/utils'
+import { Spinner } from '@/components/ui/kit'
 
 interface PanelProps {
   toc: TocItem[] | TocEntry[]
@@ -287,79 +288,139 @@ export function ThumbnailsPanel({
   return null
 }
 
-/** شريط بحث داخل المستند */
+/** شريط بحث داخل المستند — موحّد لـ PDF و EPUB (النسخة 2) */
 export function SearchBar({ isPdf }: { isPdf: boolean }) {
   const reader = useReader()
   const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
-  const runnerRef = useRef<(q: string) => void>(undefined!)
-
-  useEffect(() => {
-    if (!isPdf) return
-    runnerRef.current = (window as unknown as { __pdfSearchRunner?: (q: string) => void }).__pdfSearchRunner!
-  }, [isPdf])
+  const [listOpen, setListOpen] = useState(false)
 
   useEffect(() => {
     if (reader.searchOpen) inputRef.current?.focus()
   }, [reader.searchOpen])
 
-  if (!reader.searchOpen || !isPdf) return null
-  const total = reader.search.matches.length
-  const active = reader.search.activeIndex + 1
+  // بحث EPUB مع تهيئة (debounce)
+  useEffect(() => {
+    if (isPdf || !reader.searchOpen) return
+    const q = reader.epubQuery
+    if (!q || q.trim().length < 2) {
+      reader.setEpubMatches([])
+      return
+    }
+    const timer = setTimeout(() => {
+      void (window as unknown as { __epubSearchRunner?: (q: string) => Promise<void> }).__epubSearchRunner?.(q.trim())
+    }, 450)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reader.epubQuery, isPdf, reader.searchOpen])
+
+  if (!reader.searchOpen) return null
+  const total = isPdf ? reader.search.matches.length : reader.epubMatches.length
+  const active = isPdf ? reader.search.activeIndex + 1 : (reader.epubMatchIndex ?? 0) + 1
 
   const run = (q: string): void => {
-    ;(window as unknown as { __pdfSearchRunner?: (q: string) => void }).__pdfSearchRunner?.(q)
+    if (isPdf) {
+      ;(window as unknown as { __pdfSearchRunner?: (q: string) => void }).__pdfSearchRunner?.(q)
+    } else {
+      reader.setEpubQuery(q)
+    }
+  }
+
+  const jump = (dir: 1 | -1): void => {
+    if (isPdf) {
+      reader.setSearchActive((reader.search.activeIndex + dir + total) % Math.max(1, total))
+    } else {
+      reader.gotoEpubMatch((reader.epubMatchIndex ?? 0) + dir)
+    }
   }
 
   return (
-    <div className="absolute end-4 top-3 z-40 anim-in flex items-center gap-1.5 rounded-xl border border-line bg-surface px-2 py-1.5 shadow-xl dark:border-dline dark:bg-dsurface2">
-      <input
-        ref={inputRef}
-        value={reader.search.query}
-        onChange={(e) => run(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            const next = e.shiftKey ? active - 2 : active
-            reader.setSearchActive((next + total) % Math.max(1, total))
-          } else if (e.key === 'Escape') {
+    <div className="absolute end-4 top-3 z-40 anim-in flex flex-col items-end gap-1.5">
+      <div className="flex items-center gap-1.5 rounded-xl border border-line bg-surface px-2 py-1.5 shadow-xl dark:border-dline dark:bg-dsurface2">
+        <input
+          ref={inputRef}
+          value={isPdf ? reader.search.query : reader.epubQuery}
+          onChange={(e) => run(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              jump(e.shiftKey ? -1 : 1)
+            } else if (e.key === 'Escape') {
+              reader.setSearchOpen(false)
+              run('')
+            }
+          }}
+          placeholder={t('reader.findPlaceholder')}
+          className="w-52 bg-transparent text-sm outline-none placeholder:text-muted"
+        />
+        {reader.epubSearching && !isPdf && <Spinner size={13} />}
+        {(isPdf ? reader.search.query : reader.epubQuery) && (
+          <span className={cn('min-w-16 text-center text-xs tabular-nums', total ? 'text-muted' : 'text-red-500')}>
+            {total ? `${active}/${total}` : t('reader.noMatches')}
+          </span>
+        )}
+        {!isPdf && total > 0 && (
+          <button
+            className="rounded-md p-1 text-muted hover:bg-black/[0.06] dark:hover:bg-white/10"
+            title={t('reader.resultsList')}
+            onClick={() => setListOpen((v) => !v)}
+          >
+            <ChevronDown size={13} className={cn('transition-transform', listOpen && 'rotate-180')} />
+          </button>
+        )}
+        <button
+          className="rounded-md p-1 text-muted hover:bg-black/[0.06] disabled:opacity-40 dark:hover:bg-white/10"
+          disabled={!total}
+          onClick={() => jump(-1)}
+          title="السابق"
+        >
+          ↑
+        </button>
+        <button
+          className="rounded-md p-1 text-muted hover:bg-black/[0.06] disabled:opacity-40 dark:hover:bg-white/10"
+          disabled={!total}
+          onClick={() => jump(1)}
+          title="التالي"
+        >
+          ↓
+        </button>
+        <button
+          className="rounded-md px-1.5 py-1 text-muted hover:bg-black/[0.06] dark:hover:bg-white/10"
+          onClick={() => {
             reader.setSearchOpen(false)
             run('')
-          }
-        }}
-        placeholder={t('reader.findPlaceholder')}
-        className="w-52 bg-transparent text-sm outline-none placeholder:text-muted"
-      />
-      {reader.search.query && (
-        <span className={cn('min-w-16 text-center text-xs tabular-nums', total ? 'text-muted' : 'text-red-500')}>
-          {total ? `${active}/${total}` : t('reader.noMatches')}
-        </span>
+          }}
+        >
+          ✕
+        </button>
+      </div>
+
+      {/* قائمة نتائج EPUB */}
+      {!isPdf && listOpen && total > 0 && (
+        <div className="max-h-80 w-[22rem] overflow-y-auto rounded-xl border border-line bg-surface p-1.5 shadow-2xl dark:border-dline dark:bg-dsurface2">
+          {reader.epubMatches.map((m, i) => (
+            <button
+              key={i}
+              className={cn(
+                'block w-full rounded-lg px-2.5 py-2 text-start transition-colors hover:bg-black/[0.05] dark:hover:bg-white/[0.06]',
+                i === (reader.epubMatchIndex ?? 0) && 'bg-accent/10'
+              )}
+              onClick={() => reader.gotoEpubMatch(i)}
+            >
+              {m.section && <p className="mb-0.5 truncate text-[10.5px] font-semibold text-accent">{m.section}</p>}
+              <p
+                className="line-clamp-2 text-xs leading-relaxed"
+                dangerouslySetInnerHTML={{
+                  __html: m.excerpt
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/⟪([^⟫]*)⟫/g, '<mark class="rounded bg-sky-400/30 px-0.5">$1</mark>')
+                }}
+              />
+            </button>
+          ))}
+        </div>
       )}
-      <button
-        className="rounded-md p-1 text-muted hover:bg-black/[0.06] disabled:opacity-40 dark:hover:bg-white/10"
-        disabled={!total}
-        onClick={() => reader.setSearchActive((reader.search.activeIndex - 1 + total) % Math.max(1, total))}
-        title="السابق"
-      >
-        ↑
-      </button>
-      <button
-        className="rounded-md p-1 text-muted hover:bg-black/[0.06] disabled:opacity-40 dark:hover:bg-white/10"
-        disabled={!total}
-        onClick={() => reader.setSearchActive((reader.search.activeIndex + 1) % Math.max(1, total))}
-        title="التالي"
-      >
-        ↓
-      </button>
-      <button
-        className="rounded-md px-1.5 py-1 text-muted hover:bg-black/[0.06] dark:hover:bg-white/10"
-        onClick={() => {
-          reader.setSearchOpen(false)
-          run('')
-        }}
-      >
-        ✕
-      </button>
     </div>
   )
 }

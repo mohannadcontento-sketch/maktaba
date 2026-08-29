@@ -103,6 +103,18 @@ export interface AppSettings {
   [key: string]: string | number | boolean | null
 }
 
+/** نتيجة استعادة نسخة احتياطية (النسخة 2) */
+export interface BackupResult {
+  booksAdded: number
+  booksSkipped: number
+  tagsAdded: number
+  collectionsAdded: number
+  annotationsAdded: number
+  bookmarksAdded: number
+  coversRestored: number
+  filesRestored: number
+}
+
 // جسر API المكشوف للواجهة عبر preload
 export interface ApiBridge {
   // استيراد
@@ -168,5 +180,8 @@ export interface ApiBridge {
   printPage(): void
   openDataFolder(): Promise<void>
   exportAnnotations(bookId: string): Promise<string | null>
+  // النسخ الاحتياطي (النسخة 2)
+  exportBackup(includeFiles: boolean): Promise<{ covers: number; files: number } | null>
+  importBackup(): Promise<BackupResult | null>
   platform: NodeJS.Platform
 }

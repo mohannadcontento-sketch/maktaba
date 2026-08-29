@@ -43,6 +43,8 @@ export interface PdfHandle {
   numPages(): number
   scrollToPercent(p: number, smooth?: boolean): void
   percent(): number
+  /** نص صفحة للقراءة الصوتية (النسخة 2) */
+  pageText(page: number): Promise<string>
 }
 
 interface Props {
@@ -276,6 +278,21 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
           runSearch: (q) => runSearch(q),
           currentPage: () => curPageRef.current,
           numPages: () => numPagesRef.current,
+          pageText: async (page) => {
+            const loaded = docRef.current
+            if (!loaded || page < 1 || page > loaded.doc.numPages) return ''
+            let itemsPromise = textCache.current.get(page)
+            if (!itemsPromise) {
+              itemsPromise = extractPageText(loaded.doc, page)
+              textCache.current.set(page, itemsPromise)
+            }
+            try {
+              const items = await itemsPromise
+              return items.map((i) => i.str).join(' ')
+            } catch {
+              return ''
+            }
+          },
           scrollToPercent: (p, smooth = true) => {
             const el = containerRef.current
             if (!el) return

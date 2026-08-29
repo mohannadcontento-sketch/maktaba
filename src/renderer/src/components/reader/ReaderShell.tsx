@@ -17,6 +17,7 @@ import {
   RotateCcw,
   Printer,
   Type,
+  Volume2,
   ChevronLeft,
   ChevronRight
 } from 'lucide-react'
@@ -27,11 +28,13 @@ import type { PdfHandle } from './PdfReader'
 import type { TocItem } from '@/lib/pdfEngine'
 import { PdfReader } from './PdfReader'
 import type { EpubHandle, TocEntry } from './EpubReader'
+import type { EpubSearchMatch } from '@/lib/epubSearch'
 import { EpubReader } from './EpubReader'
 import { SidePanel, SearchBar } from './SidePanels'
 import { SelectionPopover } from './SelectionPopover'
 import { PrintDialog } from './PrintDialog'
 import { NoteEditor } from './NoteEditor'
+import { TtsBar } from './TtsBar'
 import { WindowControls } from '@/components/layout/Chrome'
 import { IconButton } from '@/components/ui/IconButton'
 import { Button, Slider, Select } from '@/components/ui/kit'
@@ -61,6 +64,8 @@ export function ReaderShell({ book }: { book: Book }) {
   const [printOpen, setPrintOpen] = useState(false)
   const [isBookmarked, setIsBookmarked] = useState(false)
   const [remainingMin, setRemainingMin] = useState<number | null>(null)
+  // القراءة الصوتية (النسخة 2)
+  const [ttsOpen, setTtsOpen] = useState(false)
 
   // اتجاه التنقل حسب لغة الكتاب (عربي/عبري/فارسي... = يمين إلى يسار)
   const epubRtl = isRtlLang(book.language)
@@ -170,6 +175,34 @@ export function ReaderShell({ book }: { book: Book }) {
     }
   }
 
+  // خطافات بحث EPUB للشريط الموحد (النسخة 2)
+  useEffect(() => {
+    const w = window as unknown as {
+      __epubSearchRunner?: (q: string) => Promise<void>
+      __epubSearchJump?: (m: EpubSearchMatch) => void
+      __epubSearchClear?: () => void
+    }
+    w.__epubSearchRunner = async (q: string) => {
+      const h = engine.epub
+      if (!h) return
+      useReader.getState().setEpubSearching(true)
+      try {
+        const res = await h.search(q)
+        useReader.getState().setEpubMatches(res)
+        if (res.length) h.goToSearchMatch(res[0])
+      } finally {
+        useReader.getState().setEpubSearching(false)
+      }
+    }
+    w.__epubSearchJump = (m) => engine.epub?.goToSearchMatch(m)
+    w.__epubSearchClear = () => engine.epub?.clearSearch()
+    return () => {
+      delete w.__epubSearchRunner
+      delete w.__epubSearchJump
+      delete w.__epubSearchClear
+    }
+  }, [engine.epub])
+
   // ---------- اختصارات لوحة المفاتيح ----------
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -210,9 +243,10 @@ export function ReaderShell({ book }: { book: Book }) {
           break
         case 'f':
         case 'F':
-          if (e.ctrlKey || !isPdf) {
+          // بحث داخل المستند — للصيغتين (النسخة 2)
+          if (e.ctrlKey || e.metaKey || !isPdf) {
             e.preventDefault()
-            if (isPdf) reader.setSearchOpen(true)
+            reader.setSearchOpen(true)
           }
           break
         case 'b':
@@ -223,11 +257,23 @@ export function ReaderShell({ book }: { book: Book }) {
           e.preventDefault()
           reader.setZen(!reader.zenMode)
           break
+        case 'p':
+        case 'P':
+          e.preventDefault()
+          // القراءة الصوتية: تشغيل/إيقاف مؤقت (النسخة 2)
+          if (ttsOpen) (window as unknown as { __ttsToggle?: () => void }).__ttsToggle?.()
+          else setTtsOpen(true)
+          break
         case 'Escape':
           if (reader.zenMode) reader.setZen(false)
           else if (reader.searchOpen) {
             reader.setSearchOpen(false)
-            engine.pdf?.runSearch('')
+            if (isPdf) engine.pdf?.runSearch('')
+            else {
+              useReader.getState().setEpubQuery('')
+              useReader.getState().setEpubMatches([])
+              engine.epub?.clearSearch()
+            }
           }
           break
       }
@@ -235,7 +281,7 @@ export function ReaderShell({ book }: { book: Book }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engine, isPdf, reader.zenMode, reader.searchOpen, currentPage, percent, totalPages, reader.bookmarks])
+  }, [engine, isPdf, reader.zenMode, reader.searchOpen, currentPage, percent, totalPages, reader.bookmarks, ttsOpen])
 
   const goBack = (): void => {
     reader.close()
@@ -266,20 +312,18 @@ export function ReaderShell({ book }: { book: Book }) {
             </IconButton>
           )}
           {isPdf && (
-            <>
-              <IconButton title={t('reader.thumbnails')} active={reader.sidebarPanel === 'thumbs'} onClick={() => reader.setSidebarPanel('thumbs')}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <rect x="3" y="3" width="8" height="8" rx="1" />
-                  <rect x="13" y="3" width="8" height="8" rx="1" />
-                  <rect x="3" y="13" width="8" height="8" rx="1" />
-                  <rect x="13" y="13" width="8" height="8" rx="1" />
-                </svg>
-              </IconButton>
-              <IconButton title={t('reader.searchDoc')} active={reader.searchOpen} onClick={() => reader.toggleSearch()}>
-                <Search size={17} />
-              </IconButton>
-            </>
+            <IconButton title={t('reader.thumbnails')} active={reader.sidebarPanel === 'thumbs'} onClick={() => reader.setSidebarPanel('thumbs')}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="8" height="8" rx="1" />
+                <rect x="13" y="3" width="8" height="8" rx="1" />
+                <rect x="3" y="13" width="8" height="8" rx="1" />
+                <rect x="13" y="13" width="8" height="8" rx="1" />
+              </svg>
+            </IconButton>
           )}
+          <IconButton title={t('reader.searchDoc')} active={reader.searchOpen} onClick={() => reader.toggleSearch()}>
+            <Search size={17} />
+          </IconButton>
           <IconButton title={t('reader.annotations')} active={reader.sidebarPanel === 'annotations'} onClick={() => reader.setSidebarPanel('annotations')}>
             <Highlighter size={17} />
           </IconButton>
@@ -366,6 +410,14 @@ export function ReaderShell({ book }: { book: Book }) {
             </IconButton>
           )}
 
+          <IconButton
+            title={t('reader.tts')}
+            active={ttsOpen}
+            onClick={() => setTtsOpen(!ttsOpen)}
+          >
+            <Volume2 size={17} />
+          </IconButton>
+
           <IconButton title={t('reader.zenMode')} onClick={() => reader.setZen(true)}>
             {zen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
           </IconButton>
@@ -403,6 +455,11 @@ export function ReaderShell({ book }: { book: Book }) {
           )}
 
           <SearchBar isPdf={isPdf} />
+
+          {/* شريط القراءة الصوتية (النسخة 2) */}
+          {ttsOpen && (
+            <TtsBar isPdf={isPdf} engine={engine} autoStart onClose={() => setTtsOpen(false)} />
+          )}
 
           {/* لوحة خيارات عرض EPUB */}
           {!isPdf && reader.settingsOpen && (

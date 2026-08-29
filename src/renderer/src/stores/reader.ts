@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { Annotation, Bookmark, Book } from '../../../shared/types'
 import type { FlowMode, ReaderThemeName } from './ui'
+import type { EpubSearchMatch } from '@/lib/epubSearch'
 
 export interface ReaderSettings {
   theme: ReaderThemeName
@@ -102,6 +103,12 @@ interface ReaderState {
   selection: SelectionInfo | null
   noteEditorFor: Annotation | null
   search: SearchState
+  // بحث EPUB (النسخة 2)
+  epubQuery: string
+  epubMatches: EpubSearchMatch[]
+  epubMatchIndex: number
+  epubSearching: boolean
+  ttsPlaying: boolean
 
   open(book: Book): Promise<void>
   close(): void
@@ -117,6 +124,12 @@ interface ReaderState {
   setSearchResults(query: string, matches: SearchMatchInfo[], boxes: SearchBox[]): void
   clearSearch(): void
   setSearchActive(i: number): void
+  setEpubMatches(list: EpubSearchMatch[]): void
+  setEpubSearching(b: boolean): void
+  setTtsPlaying(b: boolean): void
+  setEpubQuery(q: string): void
+  setEpubMatchIndex(i: number): void
+  gotoEpubMatch(i: number): void
 
   loadAnnotations(bookId: string): Promise<void>
   addAnnotation(a: Omit<Annotation, 'createdAt' | 'updatedAt'>): Promise<Annotation>
@@ -151,6 +164,11 @@ export const useReader = create<ReaderState>((set, get) => ({
   selection: null,
   noteEditorFor: null,
   search: emptySearch,
+  epubQuery: '',
+  epubMatches: [],
+  epubMatchIndex: 0,
+  epubSearching: false,
+  ttsPlaying: false,
 
   open: async (book) => {
     set({
@@ -164,7 +182,12 @@ export const useReader = create<ReaderState>((set, get) => ({
       zenMode: false,
       nightInvert: false,
       selection: null,
-      search: emptySearch
+      search: emptySearch,
+      epubQuery: '',
+      epubMatches: [],
+      epubMatchIndex: 0,
+      epubSearching: false,
+      ttsPlaying: false
     })
     await Promise.all([get().loadAnnotations(book.id), get().loadBookmarks(book.id)])
     await get().startSession()
@@ -185,7 +208,12 @@ export const useReader = create<ReaderState>((set, get) => ({
       searchOpen: false,
       settingsOpen: false,
       zenMode: false,
-      search: emptySearch
+      search: emptySearch,
+      epubQuery: '',
+      epubMatches: [],
+      epubMatchIndex: 0,
+      epubSearching: false,
+      ttsPlaying: false
     })
   },
 
@@ -201,6 +229,19 @@ export const useReader = create<ReaderState>((set, get) => ({
     set({ search: { query, matches, boxes, activeIndex: matches.length ? 0 : -1 } }),
   clearSearch: () => set({ search: emptySearch }),
   setSearchActive: (i) => set((s) => ({ search: { ...s.search, activeIndex: i } })),
+  setEpubMatches: (epubMatches) => set({ epubMatches, epubMatchIndex: 0 }),
+  setEpubSearching: (epubSearching) => set({ epubSearching }),
+  setTtsPlaying: (ttsPlaying) => set({ ttsPlaying }),
+  setEpubQuery: (epubQuery) => set({ epubQuery, epubMatchIndex: 0 }),
+  setEpubMatchIndex: (epubMatchIndex) => set({ epubMatchIndex }),
+  gotoEpubMatch: (i) => {
+    const list = get().epubMatches
+    if (!list.length) return
+    const idx = ((i % list.length) + list.length) % list.length
+    set({ epubMatchIndex: idx })
+    const m = list[idx]
+    ;(window as unknown as { __epubSearchJump?: (m: EpubSearchMatch) => void }).__epubSearchJump?.(m)
+  },
 
   loadAnnotations: async (bookId) => {
     const list = await window.api.listAnnotations(bookId)

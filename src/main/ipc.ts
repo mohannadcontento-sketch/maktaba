@@ -31,6 +31,7 @@ import {
   updateBook
 } from './db'
 import { bookFilePath, coversDir, importPaths, removeBookFiles, scanFolderForBooks, fetchAndSaveCover } from './library'
+import { exportBackup, importBackup, pickExportTarget, pickImportSource } from './backup'
 
 function win(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0]
@@ -176,6 +177,18 @@ export function registerIpc(): void {
   ipcMain.handle('app:dataFolder', () => app.getPath('userData'))
   ipcMain.handle('app:openDataFolder', async () => {
     await shell.openPath(app.getPath('userData'))
+  })
+
+  // ---------- النسخ الاحتياطي (النسخة 2) ----------
+  ipcMain.handle('backup:export', async (_e, includeFiles: boolean) => {
+    const target = await pickExportTarget()
+    if (!target) return null
+    return await exportBackup(target, !!includeFiles)
+  })
+  ipcMain.handle('backup:import', async () => {
+    const src = await pickImportSource()
+    if (!src) return null
+    return await importBackup(src)
   })
 
   ipcMain.handle(

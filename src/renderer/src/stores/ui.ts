@@ -24,6 +24,8 @@ interface UiState {
   searchQuery: string
   toasts: Toast[]
   dropOverlay: boolean
+  // نافذة "ما الجديد في النسخة 2"
+  whatsNewOpen: boolean
 
   setPage(p: PageName): void
   setThemeMode(m: ThemeMode): void
@@ -37,6 +39,7 @@ interface UiState {
   setDropOverlay(b: boolean): void
   toast(message: string, kind?: Toast['kind']): void
   dismissToast(id: string): void
+  setWhatsNewOpen(b: boolean): void
 }
 
 function applyTheme(mode: ThemeMode): boolean {
@@ -60,6 +63,7 @@ export const useUi = create<UiState>((set, get) => ({
   searchQuery: '',
   toasts: [],
   dropOverlay: false,
+  whatsNewOpen: false,
 
   setPage: (page) => set({ page }),
   setThemeMode: (mode) => {
@@ -81,5 +85,6 @@ export const useUi = create<UiState>((set, get) => ({
     set((s) => ({ toasts: [...s.toasts, { id, message, kind }] }))
     setTimeout(() => get().dismissToast(id), 3200)
   },
-  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  setWhatsNewOpen: (whatsNewOpen) => set({ whatsNewOpen })
 }))

@@ -96,8 +96,10 @@ async function main() {
     await page.waitForSelector('.cursor-pointer.rounded-2xl', { timeout: 15000 })
     await sleep(800)
 
-    const pdfBook = imported.find((b) => b.format === 'pdf')
-    const epubBook = imported.find((b) => b.format === 'epub')
+    // قد تكون العينات مستوردة سابقًا (منع تكرار يُرجع []) — نقرأ من المكتبة احتياطًا
+    const lib0 = await page.evaluate(() => window.api.listBooks())
+    const pdfBook = imported.find((b) => b.format === 'pdf') ?? lib0.find((b) => b.format === 'pdf')
+    const epubBook = imported.find((b) => b.format === 'epub') ?? lib0.find((b) => b.format === 'epub')
     report('pdf sample imported', !!pdfBook)
     report('epub sample imported', !!epubBook)
 

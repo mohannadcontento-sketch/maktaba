@@ -3,6 +3,7 @@ import ePub, { type Book as EpubBook, type Rendition, type Contents, type NavIte
 import type { Book } from '../../../../shared/types'
 import { useReader, type ReaderSettings } from '@/stores/reader'
 import { clamp, isRtlLang } from '@/lib/utils'
+import { searchEpub, collectSectionChunks, type EpubSearchMatch, type TtsChunk } from '@/lib/epubSearch'
 
 export interface TocEntry {
   label: string
@@ -18,6 +19,12 @@ export interface EpubHandle {
   displayAtPercent(p: number): void
   applySettings(s: ReaderSettings): void
   currentCfi(): string | null
+  // بحث داخل الكتاب (النسخة 2)
+  search(q: string, onProgress?: (done: number, total: number) => void): Promise<EpubSearchMatch[]>
+  clearSearch(): void
+  goToSearchMatch(m: EpubSearchMatch): void
+  // فقرات القسم الحالي للقراءة الصوتية (النسخة 2)
+  getTtsChunks(): Promise<TtsChunk[]>
 }
 
 interface Props {
@@ -102,6 +109,8 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
   const attachedIdsRef = useRef(new Set<string>())
   const cssRef = useRef('')
   const styleElsRef = useRef<Set<HTMLStyleElement>>(new Set())
+  // مؤثرات نتائج البحث المرسومة حاليًا (النسخة 2)
+  const searchHighlightsRef = useRef<string[]>([])
 
   // حقن CSS كعنصر <style> مضمّن — تسجيله كرابط (حتى blob:) يعلّق جاهزية الفصل داخل iframe
   const registerThemeHook = useCallback(
@@ -362,7 +371,63 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
             applyAllThemes(rel, s)
             rel.themes.fontSize(`${s.fontSize}%`)
           },
-          currentCfi: () => lastCfiRef.current
+          currentCfi: () => lastCfiRef.current,
+          // ---------- بحث داخل الكتاب ----------
+          search: async (q, onProgress) => {
+            const b = bookRef.current
+            if (!b || !rel) return []
+            clearSearchHighlights()
+            const res = await searchEpub(b, q, onProgress)
+            for (const m of res) {
+              try {
+                rel.annotations.add(
+                  'highlight',
+                  m.cfi,
+                  {},
+                  () => {},
+                  `sr-${Math.random().toString(36).slice(2)}`,
+                  {
+                    fill: '#38bdf8',
+                    'fill-opacity': '0.3',
+                    stroke: '#38bdf8',
+                    'stroke-opacity': '0.55',
+                    'mix-blend-mode': 'multiply'
+                  }
+                )
+                searchHighlightsRef.current.push(m.cfi)
+              } catch {
+                /* تجاهل مطابقة لا يمكن رسمها */
+              }
+            }
+            return res
+          },
+          clearSearch: clearSearchHighlights,
+          goToSearchMatch: (m) => {
+            void rel?.display(m.pointCfi || m.cfi)
+          },
+          // ---------- فقرات القسم الحالي للقراءة الصوتية ----------
+          getTtsChunks: async () => {
+            const b = bookRef.current
+            if (!b) return []
+            try {
+              return await collectSectionChunks(b, lastCfiRef.current)
+            } catch {
+              return []
+            }
+          }
+        }
+
+        function clearSearchHighlights(): void {
+          const r = renditionRef.current
+          if (!r) return
+          for (const c of searchHighlightsRef.current) {
+            try {
+              r.annotations.remove(c, 'highlight')
+            } catch {
+              /* ignore */
+            }
+          }
+          searchHighlightsRef.current = []
         }
 
         // الأحداث

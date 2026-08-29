@@ -4,6 +4,7 @@ import { useLibrary } from '@/stores/library'
 import { useReader } from '@/stores/reader'
 import { applyDirection, initI18n } from '@/i18n'
 import { AppShell, Toaster } from '@/components/layout/Chrome'
+import { WhatsNewDialog } from '@/components/layout/WhatsNew'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { LibraryPage } from '@/pages/LibraryPage'
 import { StatsPage } from '@/pages/StatsPage'
@@ -26,6 +27,9 @@ export default function App() {
       ui.setLang(lang === 'en' ? 'en' : 'ar')
       ui.setThemeMode((themeMode as 'light' | 'dark' | 'system') || 'system')
       await lib.load()
+      // نافذة "ما الجديد" عند أول تشغيل للنسخة 2
+      const seenV2 = await window.api.getSetting('app.whatsNewV2')
+      if (!seenV2) ui.setWhatsNewOpen(true)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -113,6 +117,7 @@ export default function App() {
         {page === 'reader' && <ReaderPage />}
       </main>
       <Toaster />
+      <WhatsNewDialog />
       {ui.dropOverlay && (
         <div className="fixed inset-0 z-[95] flex items-center justify-center bg-teal-900/60 backdrop-blur-sm">
           <div className="anim-in flex flex-col items-center gap-3 rounded-3xl border-2 border-dashed border-teal-300 bg-white/10 px-16 py-12 text-white">
