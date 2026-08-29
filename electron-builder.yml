@@ -14,11 +14,23 @@ asarUnpack:
 
 win:
   icon: build/icon.ico
+  # على لينكس لا يتوفر wine لتحرير موارد exe — الأيقونة تُضبط عبر NSIS والاختصارات
+  # (لتضمين الأيقونة داخل exe نفسه: ابنِ على ويندوز أو ثبّت wine ثم أزل signAndEditExecutable)
+  signAndEditExecutable: false
   target:
     - target: nsis
       arch: [x64]
     - target: portable
       arch: [x64]
+
+# ملاحظة بناء على لينكس:
+# 1) أزل wine من PATH إن وُجد (يستخدم wine مكسورًا)
+# 2) شغّل: MAKTABA_NO_WINE=1 npx electron-builder --win
+#    (يستخدم UninstallerReader بنسخة JS بدل تشغيل المثبّت تحت wine — راجع NsisTarget.js)
+
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
 
 nsis:
   oneClick: false
@@ -27,6 +39,10 @@ nsis:
   createDesktopShortcut: always
   shortcutName: مكتبة
   artifactName: Maktaba-Setup-${version}.${ext}
+  # خيار حذف بيانات النسخة السابقة عند التثبيت (سؤال داخل المثبّت)
+  include: build/installer.nsh
+  # وخيار حذف البيانات عند إزالة التطبيق (مربع اختيار في نافذة الإزالة)
+  deleteAppDataOnUninstall: true
 
 portable:
   artifactName: Maktaba-Portable-${version}.${ext}
