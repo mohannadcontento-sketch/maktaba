@@ -2,9 +2,29 @@
 
 قارئ كتب احترافي لملفات **EPUB** و **PDF** بواجهة عربية أولاً (RTL)، مبني بتقنيات الويب ويعمل على Windows.
 
-![Tech](https://img.shields.io/badge/Electron-33-47848F) ![React](https://img.shields.io/badge/React-18-61DAFB) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![License](https://img.shields.io/badge/License-MIT-green)
+![Tech](https://img.shields.io/badge/Electron-33-47848F) ![React](https://img.shields.io/badge/React-18-61DAFB) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![License](https://img.shields.io/badge/License-MIT-green) ![Version](https://img.shields.io/badge/%D8%A7%D9%84%D8%A5%D8%B5%D8%AF%D8%A7%D8%B1-2.0.0-blue)
 
 ---
+
+## 📥 التنزيل — النسخة 2.0.0
+
+| الحزمة | الوصف |
+|---|---|
+| `Maktaba-Setup-2.0.0.exe` | مثبّت تفاعلي — يكتشف بيانات النسخة السابقة ويسألك إن أردت حذفها والبدء من جديد |
+| `Maktaba-Portable-2.0.0.exe` | نسخة محمولة تعمل دون تثبيت |
+
+> ⬇️ **[حمّل الحزم من صفحة Releases](https://github.com/mohannadcontento-sketch/maktaba/releases/latest)**
+
+### 🆕 ما الجديد في النسخة 2
+
+- 🔍 **بحث نصي كامل داخل كتب EPUB** — مع تطبيع عربي (تجاهل التشكيل وهَمزات الـ أ/إ/آ)، قائمة نتائج بالمقتطفات والقفز الفوري إلى الموضع.
+- 🗣️ **قراءة صوتية (TTS)** للكتب الإلكترونية مع تتبّع الفقرة المقروءة.
+- 💾 **نسخ احتياطي واستعادة** للمكتبة كاملة (بيانات + ملفات الكتب).
+- 🧹 **خيار مسح بيانات النسخة السابقة** أثناء التثبيت، وحذف البيانات عند الإزالة.
+- 🛠️ إصلاح شامل: الأغلفة من النت وأغلفة PDF، شريط التقدم بكل الصيغ، التمرير بالفأرة والأسهم في EPUB، الهوامش، وإعادة ضبط إعدادات القراءة.
+
+---
+
 
 ## ✨ المزايا
 
@@ -70,14 +90,16 @@ npm run fixtures         # توليد كتب عينة للتجربة في sample
 
 > **ملاحظة:** أول عملية تغليف قد تستغرق وقتًا أطول لتنزيل أدوات NSIS.
 
+> **للبناء على لينكس دون wine:** `MAKTABA_NO_WINE=1 npm run dist`
+
 ---
 
 ## 📦 المخرجات
 
 بعد `npm run dist` تجد في مجلد `release/`:
 
-- `Maktaba-Setup-1.0.0.exe` — مثبت تفاعلي مع اختيار مجلد التثبيت واختصار سطح المكتب.
-- `Maktaba-Portable-1.0.0.exe` — نسخة محمولة تعمل دون تثبيت.
+- `Maktaba-Setup-2.0.0.exe` — مثبت تفاعلي مع اختيار مجلد التثبيت واختصار سطح المكتب.
+- `Maktaba-Portable-2.0.0.exe` — نسخة محمولة تعمل دون تثبيت.
 
 ---
 
