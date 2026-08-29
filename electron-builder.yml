@@ -6,8 +6,24 @@ directories:
   output: release
   buildResources: build
 
+# نبني على لينكس لويندوز — لا تجرب إعادة بناء الوحدات الأصلية هنا (ستفشل/تتلخبط)،
+# نستبدلها بأنفسنا بنسخ ويندوز الرسمية عبر scripts/fix-win-native.js قبل البناء
+npmRebuild: false
+
 files:
   - out/**
+  # نستبعد مخلفات البناء الضخمة من better-sqlite3 (مصادر C++ و obj و sqlite.c) —
+  # لا حاجة لها وقت التشغيل: المطلوب lib/ + build/Release/*.node + package.json فقط
+  - "!**/node_modules/better-sqlite3/src/**"
+  - "!**/node_modules/better-sqlite3/deps/**"
+  - "!**/node_modules/better-sqlite3/build/obj/**"
+  - "!**/node_modules/better-sqlite3/build/node_gyp_bins/**"
+  - "!**/node_modules/better-sqlite3/build/Release/test_extension.node"
+  - "!**/node_modules/better-sqlite3/build/Release/obj/**"
+  # @napi-rs/canvas (optionalDependency من pdfjs-dist) — تُستخدم فقط عند تشغيل pdf.js
+  # داخل Node، وليس في المتصفح. نسخة لينكس فقط موجودة عندنا؛ استبعادها أأمن من
+  # حزمها (لن يحمّلها أحد أصلًا، وإن حاول أحدهم فسنحصل على خطأ واضح لا صمت)
+  - "!**/node_modules/@napi-rs/canvas*/**"
 
 asarUnpack:
   - "**/*.node"

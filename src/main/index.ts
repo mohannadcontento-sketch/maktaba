@@ -1,10 +1,36 @@
-import { app, BrowserWindow, Menu, net, protocol, session, shell } from 'electron'
+import { app, BrowserWindow, Menu, dialog, net, protocol, session, shell } from 'electron'
 import path from 'node:path'
+import os from 'node:os'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { initDb } from './db'
 import { registerIpc } from './ipc'
 import { bookFilePath, coversDir } from './library'
+
+// ——— حماية الأعطال: لا نفوت صامتًا أبدًا — نسجّل الخطأ ونعرضه للمستخدم ———
+function crashLogPath(): string {
+  try {
+    return path.join(app.getPath('userData'), 'crash.log')
+  } catch {
+    return path.join(os.tmpdir(), 'maktaba-crash.log')
+  }
+}
+
+function reportCrash(kind: string, err: unknown): void {
+  const msg = err instanceof Error ? (err.stack ?? err.message) : String(err)
+  try {
+    fs.appendFileSync(crashLogPath(), `[${new Date().toISOString()}] ${kind}\n${msg}\n\n`)
+  } catch { /* لا شيء — الأهم عرض الخطأ */ }
+  try {
+    dialog.showErrorBox(
+      'خطأ غير متوقع في مكتبة / Unexpected error in Maktaba',
+      `${kind}\n\n${msg.slice(0, 1500)}\n\n(سُجّل في crash.log داخل مجلد بيانات التطبيق)`
+    )
+  } catch { /* آخر دفاع */ }
+}
+
+process.on('uncaughtException', (e) => reportCrash('uncaughtException', e))
+process.on('unhandledRejection', (r) => reportCrash('unhandledRejection', r))
 
 // يجب التسجيل قبل جاهزية التطبيق
 protocol.registerSchemesAsPrivileged([
@@ -169,22 +195,31 @@ if (!gotLock) {
   })
 
   app.whenReady().then(() => {
-    Menu.setApplicationMenu(null)
-    initDb()
-    registerIpc()
-    registerBookProtocol()
-    registerCoverProtocol()
+    try {
+      Menu.setApplicationMenu(null)
+      initDb()
+      registerIpc()
+      registerBookProtocol()
+      registerCoverProtocol()
 
-    // منع التنقل بالسحب والإفلات على مستوى الويب
-    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-      callback({ responseHeaders: details.responseHeaders })
-    })
+      // منع التنقل بالسحب والإفلات على مستوى الويب
+      session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+        callback({ responseHeaders: details.responseHeaders })
+      })
 
-    createWindow()
+      createWindow()
 
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow()
-    })
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      })
+    } catch (err) {
+      // فشل بدء التشغيل (مثلًا: قاعدة بيانات/وحدة أصلية) — نعرضه بدل الصمت
+      reportCrash('startup', err)
+      app.quit()
+    }
+  }).catch((err) => {
+    reportCrash('whenReady', err)
+    app.quit()
   })
 
   app.on('window-all-closed', () => {

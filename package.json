@@ -1,6 +1,6 @@
 {
   "name": "maktaba",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "مكتبة — قارئ كتب احترافي لملفات EPUB و PDF",
   "main": "./out/main/index.js",
   "author": "Maktaba",
@@ -14,7 +14,8 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "postinstall": "electron-builder install-app-deps",
     "dist": "electron-vite build && electron-builder --win",
-    "fixtures": "node scripts/make-fixtures.mjs"
+    "fixtures": "node scripts/make-fixtures.mjs",
+    "build:win": "bash scripts/build-win.sh"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
