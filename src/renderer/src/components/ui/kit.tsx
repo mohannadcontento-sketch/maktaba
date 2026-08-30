@@ -131,7 +131,8 @@ export function Slider({
   max,
   step = 1,
   onChange,
-  className
+  className,
+  ...rest
 }: {
   value: number
   min: number
@@ -139,7 +140,7 @@ export function Slider({
   step?: number
   onChange(v: number): void
   className?: string
-}) {
+} & Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'min' | 'max' | 'step' | 'onChange'>) {
   return (
     <input
       type="range"
@@ -150,6 +151,7 @@ export function Slider({
       step={step}
       onChange={(e) => onChange(Number(e.target.value))}
       className={cn('h-1.5 w-full cursor-pointer appearance-none rounded-full bg-gray-300 dark:bg-dline accent-accent [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:dark:bg-daccent [&::-webkit-slider-thumb]:shadow', className)}
+      {...rest}
     />
   )
 }

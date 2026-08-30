@@ -103,7 +103,7 @@ async function main() {
   /** فتح لوحة خيارات العرض وإرجاع قيمة أول شريط تمرير (حجم الخط) */
   const openDrawerAndReadFontSlider = async () => {
     await evaljs(`(() => {
-      const btn = [...document.querySelectorAll('header button')].find((b) => (b.title || '').includes('خيارات العرض'))
+      const btn = [...document.querySelectorAll('header button')].find((b) => (b.title || '').includes('خيارات العرض') || (b.title || '').includes('إعدادات القارئ'))
       btn?.click()
       return 1
     })()`)
@@ -184,7 +184,7 @@ async function main() {
     await waitEpubReady()
     const sliderAfterReopen = await openDrawerAndReadFontSlider()
     report('الإعداد المستقل يُستعاد عند إعادة الفتح', sliderAfterReopen === '130', `slider=${sliderAfterReopen}`)
-    await evaljs(`(() => { [...document.querySelectorAll('header button')].find((b) => (b.title || '').includes('خيارات العرض'))?.click(); return 1 })()`)
+    await evaljs(`(() => { [...document.querySelectorAll('header button')].find((b) => (b.title || '').includes('خيارات العرض') || (b.title || '').includes('إعدادات القارئ'))?.click(); return 1 })()`)
     await sleep(300)
     await backToLibrary()
 

@@ -3,6 +3,7 @@ import ePub, { type Book as EpubBook, type Rendition, type Contents, type NavIte
 import type { Book } from '../../../../shared/types'
 import { useReader, type ReaderSettings } from '@/stores/reader'
 import { clamp, isMobilePlatform, isRtlLang } from '@/lib/utils'
+import { useMobilePrefs } from '@/stores/mobilePrefs'
 import { searchEpub, collectSectionChunks, type EpubSearchMatch, type TtsChunk } from '@/lib/epubSearch'
 
 export interface TocEntry {
@@ -19,6 +20,8 @@ export interface EpubHandle {
   displayAtPercent(p: number): void
   applySettings(s: ReaderSettings): void
   currentCfi(): string | null
+  /** href للقسم الحالي — يُستخدم لإظهار اسم الفصل في شريط المعلومات */
+  currentHref(): string | null
   // بحث داخل الكتاب (النسخة 2)
   search(q: string, onProgress?: (done: number, total: number) => void): Promise<EpubSearchMatch[]>
   clearSearch(): void
@@ -43,6 +46,18 @@ const THEME_RULES: Record<string, string> = {
          a { color: #a1662f !important; }`,
   night: `body { background: #17191e !important; color: #cfd3da !important; }
           a { color: #5eead4 !important; }
+          img, svg, video { filter: brightness(0.85); }`,
+  paper: `body { background: #e8e6e1 !important; color: #3a3a3a !important; }
+         a { color: #0d7a72 !important; }`,
+  green: `body { background: #e3ece1 !important; color: #2f4432 !important; }
+         a { color: #2d6a4f !important; }`,
+  rose: `body { background: #f5e4e0 !important; color: #5c3a34 !important; }
+         a { color: #b05f52 !important; }`,
+  amber: `body { background: #0d0c0a !important; color: #d9a441 !important; }
+          a { color: #f0c060 !important; }
+          img, svg, video { filter: brightness(0.8) sepia(0.25); }`,
+  slate: `body { background: #101720 !important; color: #a8c0d8 !important; }
+          a { color: #7cc4f8 !important; }
           img, svg, video { filter: brightness(0.85); }`
 }
 
@@ -50,7 +65,12 @@ const THEME_RULES: Record<string, string> = {
 const THEME_BG: Record<string, string> = {
   day: '#ffffff',
   sepia: '#f4ecd8',
-  night: '#17191e'
+  paper: '#e8e6e1',
+  green: '#e3ece1',
+  rose: '#f5e4e0',
+  night: '#17191e',
+  amber: '#0d0c0a',
+  slate: '#101720'
 }
 
 export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }: Props) {
@@ -77,6 +97,9 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
   const isContinuousRef = useRef(false)
   const rtlRef = useRef(isRtlLang(book.language))
   const flipCooldownRef = useRef(0)
+  const lastHrefRef = useRef<string | null>(null)
+  // حاوية الحركة — تُحرّك عند قلب الصفحة على الجوال (انزلاق خفيف)
+  const flipAnimElRef = useRef<HTMLDivElement | null>(null)
   // كبت نقرة قلب الصفحة بعد فتح محرر الملاحظة بالنقر على تعليم
   const annTapSupRef = useRef(0)
 
@@ -231,6 +254,41 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
     [drainNav]
   )
 
+  // حركة انزلاق خفيفة عند القلب (جوال فقط، قابلة للتعطيل من إعدادات التحكم)
+  const animateFlip = useCallback((dir: 1 | -1): void => {
+    try {
+      if (!isMobilePlatform()) return
+      if (useMobilePrefs.getState().prefs.flipAnim === 'none') return
+      const el = flipAnimElRef.current
+      if (!el || typeof el.animate !== 'function') return
+      const dirX = (rtlRef.current ? -1 : 1) * dir * -20
+      const anim = el.animate(
+        [
+          { transform: 'translateX(0)', opacity: 1 },
+          { transform: `translateX(${dirX}px)`, opacity: 0.4 }
+        ],
+        { duration: 110, easing: 'ease-in' }
+      )
+      anim.finished
+        .then(() => {
+          el.animate(
+            [
+              { transform: `translateX(${dirX * 0.5}px)`, opacity: 0.55 },
+              { transform: 'translateX(0)', opacity: 1 }
+            ],
+            { duration: 160, easing: 'ease-out' }
+          )
+        })
+        .catch(() => {})
+    } catch {
+      /* ignore */
+    }
+  }, [])
+  const animateFlipRef = useRef(animateFlip)
+  useEffect(() => {
+    animateFlipRef.current = animateFlip
+  }, [animateFlip])
+
   // خطاف تشخيصي للاختبارات — حالة طابور التنقل
   const navInfoRef = useRef<() => { busy: boolean; pending: number }>(() => ({ busy: false, pending: 0 }))
   useEffect(() => {
@@ -248,6 +306,7 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
 
   // ---------- التنقل (متوافق مع الوضعين) ----------
   const next = useCallback((): void => {
+    if (flowRef.current === 'paginated') animateFlipRef.current(1)
     if (flowRef.current === 'scrolled') {
       const el = scrollerEl()
       if (el) {
@@ -263,6 +322,7 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
   }, [scrollerEl, queueFlip])
 
   const prev = useCallback((): void => {
+    if (flowRef.current === 'paginated') animateFlipRef.current(-1)
     if (flowRef.current === 'scrolled') {
       const el = scrollerEl()
       if (el) {
@@ -501,6 +561,7 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
             rel.themes.fontSize(`${s.fontSize}%`)
           },
           currentCfi: () => lastCfiRef.current,
+          currentHref: () => lastHrefRef.current,
           // ---------- بحث داخل الكتاب ----------
           search: async (q, onProgress) => {
             const b = bookRef.current
@@ -572,6 +633,7 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
             const rst = useReader.getState()
             if (rst.selection) rst.setSelection(null)
             lastCfiRef.current = start.cfi
+            if (typeof start.href === 'string') lastHrefRef.current = start.href
             if (typeof start.index === 'number') {
               lastSpineIndexRef.current = start.index
             } else {
@@ -945,10 +1007,17 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
           prevRef.current()
         }
       } else {
-        // الوسط: إخفاء/إظهار الأشرطة (وضع غامر)
-        log('zen')
-        const st = useReader.getState()
-        st.setZen(!st.zenMode)
+        // الوسط: فعل قابل للاختيار من إعدادات التحكم (وضع صافٍ أو لوحة الإعدادات)
+        const centerAction = useMobilePrefs.getState().prefs.centerAction
+        if (centerAction === 'settings') {
+          log('settings')
+          const st = useReader.getState()
+          st.setSettingsOpen(!st.settingsOpen)
+        } else {
+          log('zen')
+          const st = useReader.getState()
+          st.setZen(!st.zenMode)
+        }
       }
     } catch {
       /* ignore */
@@ -992,6 +1061,8 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
         /* الهوامش تُطبق هنا — تعمل بشكل صحيح في الوضعين معًا، وخلفية الحاوية
            بلون السمة نفسه فتبدو الهوامش جزءًا من صفحة الكتاب (تطبيق مباشر على النص) */
         <div
+          ref={flipAnimElRef}
+          data-testid="epub-flip-layer"
           className="h-full w-full"
           style={{
             paddingTop: `${Math.max(0, settings.marginTop)}%`,

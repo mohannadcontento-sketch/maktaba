@@ -27,6 +27,9 @@ import type { EpubHandle, TocEntry } from './EpubReader'
 import type { EpubSearchMatch } from '@/lib/epubSearch'
 import { EpubReader } from './EpubReader'
 import { SidePanel, SearchBar } from './SidePanels'
+import { MoonSheet, MoonStatusBar, MoonBrightnessEdge } from './MoonMobile'
+import { useMobilePrefs } from '@/stores/mobilePrefs'
+import { setVolumeKeys, setImmersive, setKeepAwake } from '@/platform/mkNative'
 import { SelectionPopover } from './SelectionPopover'
 import { NoteEditor } from './NoteEditor'
 import { TtsBar } from './TtsBar'
@@ -40,6 +43,29 @@ type ReaderToc = TocItem[] | TocEntry[]
 interface EngineState {
   toc: ReaderToc
   percent: number
+}
+
+/** البحث في شجرة الفهرس عن href يطابق القسم الحالي — لإ اسم الفصل في شريط المعلومات */
+function findTocLabel(toc: ReaderToc, href: string | null | undefined): string | null {
+  if (!href || !toc.length) return null
+  const clean = (u: string): string =>
+    u.split('?')[0].split('#')[0].replace(/^\.?\//, '')
+  const target = clean(href)
+  if (!target) return null
+  const walk = (items: ReaderToc): string | null => {
+    for (const it of items) {
+      const e = it as TocEntry & TocItem
+      const h = e.href ? clean(e.href) : ''
+      if (h && (h === target || target.endsWith(h) || h.endsWith(target))) return e.label
+      const kids = (e.children ?? (e as unknown as { items?: ReaderToc }).items) as ReaderToc | undefined
+      if (kids?.length) {
+        const r = walk(kids)
+        if (r) return r
+      }
+    }
+    return null
+  }
+  return walk(toc)
 }
 
 export function ReaderShell({ book }: { book: Book }) {
@@ -62,6 +88,74 @@ export function ReaderShell({ book }: { book: Book }) {
   const [ttsOpen, setTtsOpen] = useState(false)
   // قراءة النص المحدد فقط (النسخة 2.2)
   const [ttsSelection, setTtsSelection] = useState<string | null>(null)
+
+  // ---------- تجربة الجوال على طريقة Moon+ Reader (v2.6) ----------
+  const isMobile = isMobilePlatform()
+  const mp = useMobilePrefs((s) => s.prefs)
+  const [autoScrollOn, setAutoScrollOn] = useState(false)
+  const [chapter, setChapter] = useState<string | null>(null)
+
+  // تحميل تفضيلات الجوال مرة واحدة
+  useEffect(() => {
+    if (!isMobile) return
+    void useMobilePrefs.getState().load()
+  }, [isMobile])
+
+  // أزرار الصوت للتقليب — مستمع JS يتصل به بلجن أندرويد الأصلي
+  useEffect(() => {
+    if (!isMobile) return
+    const w = window as unknown as { __mkVolumeKey?: (d: 'up' | 'down') => void }
+    w.__mkVolumeKey = (dir) => {
+      // + للسابق، − للتالي (اصطلاح قارئ Moon+)
+      if (isPdf) dir === 'up' ? engine.pdf?.prevPage() : engine.pdf?.nextPage()
+      else dir === 'up' ? engine.epub?.prev() : engine.epub?.next()
+    }
+    return () => {
+      delete w.__mkVolumeKey
+    }
+  }, [isMobile, isPdf, engine])
+
+  // مزامنة راية أزرار الصوت مع الأصل (تُعطّل خروجًا من القارئ حتى لا تعطل الصوت)
+  useEffect(() => {
+    if (!isMobile) return
+    void setVolumeKeys(mp.volumeKeys)
+    return () => {
+      void setVolumeKeys(false)
+    }
+  }, [isMobile, mp.volumeKeys])
+
+  // إبقاء الشاشة مضاءة أثناء القراءة
+  useEffect(() => {
+    if (!isMobile) return
+    void setKeepAwake(mp.keepAwake)
+    return () => {
+      void setKeepAwake(false)
+    }
+  }, [isMobile, mp.keepAwake])
+
+  // ملء الشاشة (إخفاء أشرطة النظام) في الوضع الصافي على الجوال
+  useEffect(() => {
+    if (!isMobile) return
+    void setImmersive(reader.zenMode)
+  }, [isMobile, reader.zenMode])
+
+  // التمرير التلقائي — يقلب الصفحات على مهل حسب السرعة (EPUB و PDF معًا)
+  useEffect(() => {
+    if (!autoScrollOn) return
+    const secs = [10, 8, 6.5, 5, 4, 3, 2.5, 2, 1.5, 1][Math.max(1, Math.min(10, mp.autoScrollSpeed)) - 1]
+    const iv = setInterval(() => {
+      if (isPdf) engine.pdf?.nextPage()
+      else engine.epub?.next()
+    }, secs * 1000)
+    return () => clearInterval(iv)
+  }, [autoScrollOn, mp.autoScrollSpeed, isPdf, engine])
+
+  // اسم الفصل الحالي لشريط المعلومات (EPUB)
+  useEffect(() => {
+    if (isPdf) return
+    const href = engine.epub?.currentHref()
+    if (href) setChapter(findTocLabel(toc, href))
+  }, [percent, toc, engine, isPdf])
 
   // جسر: زر «قراءة المحدد» في لوحة التحديد → شريط القراءة الصوتية في وضع المحدد
   useEffect(() => {
@@ -415,18 +509,19 @@ export function ReaderShell({ book }: { book: Book }) {
           </div>
 
           <IconButton
-            title={reader.nightInvert || settings.theme === 'night' ? t('reader.dayMode') : t('reader.nightMode')}
+            title={reader.nightInvert || ['night', 'amber', 'slate'].includes(settings.theme) ? t('reader.dayMode') : t('reader.nightMode')}
             onClick={() =>
               isPdf
                 ? reader.setNightInvert(!reader.nightInvert)
-                : updateSettings({ theme: settings.theme === 'night' ? 'day' : 'night' })
+                : updateSettings({ theme: ['night', 'amber', 'slate'].includes(settings.theme) ? 'day' : 'night' })
             }
           >
-            {reader.nightInvert || settings.theme === 'night' ? <Sun size={17} /> : <Moon size={17} />}
+            {reader.nightInvert || ['night', 'amber', 'slate'].includes(settings.theme) ? <Sun size={17} /> : <Moon size={17} />}
           </IconButton>
 
-          {!isPdf && settingsLoaded && (
-            <IconButton title={t('reader.displayOptions')} active={reader.settingsOpen} onClick={() => reader.setSettingsOpen(!reader.settingsOpen)}>
+          {/* الجوال: لوحة Moon+ متاحة أيضًا لـ PDF (التحكم والسطوع) */}
+          {(settingsLoaded || (isPdf && isMobile)) && (
+            <IconButton title={isMobile ? 'إعدادات القارئ' : t('reader.displayOptions')} active={reader.settingsOpen} onClick={() => reader.setSettingsOpen(!reader.settingsOpen)}>
               <Type size={17} />
             </IconButton>
           )}
@@ -463,6 +558,27 @@ export function ReaderShell({ book }: { book: Book }) {
         )}
 
         <main className="relative flex min-w-0 flex-1">
+          {/* تراكب السطوع — على طريقة Moon+ (مستوى أسود فوق كل الشاشة) */}
+          {isMobile && mp.brightness < 100 && (
+            <div
+              data-testid="moon-dim"
+              className="pointer-events-none fixed inset-0 z-[70]"
+              style={{ background: '#000', opacity: (100 - mp.brightness) / 100 }}
+            />
+          )}
+
+          {/* شريط السطوع على الحافة اليسرى — سحب رأسي */}
+          {isMobile && !reader.zenMode && <MoonBrightnessEdge />}
+
+          {/* شريط المعلومات السفلي (الفصل/النسبة/الوقت/البطارية) */}
+          {isMobile && mp.statusBar && !reader.zenMode && (
+            <MoonStatusBar
+              chapter={isPdf ? null : chapter}
+              percent={percent}
+              pageOf={isPdf ? t('reader.pageOf', { page: currentPage, total: totalPages }) : null}
+            />
+          )}
+
           {isPdf ? (
             <PdfViewer book={book} onDocReady={onPdfReady} onPageChange={onEpdfPageChange} />
           ) : settingsLoaded ? (
@@ -496,16 +612,56 @@ export function ReaderShell({ book }: { book: Book }) {
             />
           )}
 
-          {/* لوحة خيارات عرض EPUB */}
-          {!isPdf && reader.settingsOpen && settingsLoaded && (
-            <DisplayOptionsDrawer
-              settings={settings}
-              onChange={updateSettings}
-              perBook={hasBookOverride}
-              onApplyToAll={applyToAllBooks}
-              onResetBook={resetBookSettings}
-              onClose={() => reader.setSettingsOpen(false)}
-            />
+          {/* لوحة خيارات عرض EPUB — الجوال: لوحة Moon+ بتبويبات */}
+          {reader.settingsOpen &&
+            (isPdf ? (
+              isMobile && (
+                <MoonSheet
+                  settings={settings}
+                  onChange={() => {}}
+                  perBook={false}
+                  onApplyToAll={() => {}}
+                  onResetBook={() => {}}
+                  onClose={() => reader.setSettingsOpen(false)}
+                  autoScrollOn={autoScrollOn}
+                  onToggleAutoScroll={() => setAutoScrollOn((v) => !v)}
+                  isPdf
+                />
+              )
+            ) : settingsLoaded && (
+              isMobile ? (
+                <MoonSheet
+                  settings={settings}
+                  onChange={updateSettings}
+                  perBook={hasBookOverride}
+                  onApplyToAll={applyToAllBooks}
+                  onResetBook={resetBookSettings}
+                  onClose={() => reader.setSettingsOpen(false)}
+                  autoScrollOn={autoScrollOn}
+                  onToggleAutoScroll={() => setAutoScrollOn((v) => !v)}
+                  isPdf={false}
+                />
+              ) : (
+                <DisplayOptionsDrawer
+                  settings={settings}
+                  onChange={updateSettings}
+                  perBook={hasBookOverride}
+                  onApplyToAll={applyToAllBooks}
+                  onResetBook={resetBookSettings}
+                  onClose={() => reader.setSettingsOpen(false)}
+                />
+              )
+            ))}
+
+          {/* قرص إيقاف التمرير التلقائي */}
+          {isMobile && autoScrollOn && (
+            <button
+              data-testid="moon-autoscroll-pill"
+              onClick={() => setAutoScrollOn(false)}
+              className="absolute bottom-16 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-4 py-2 text-xs text-white shadow-lg backdrop-blur"
+            >
+              ⏸ إيقاف التمرير التلقائي
+            </button>
           )}
 
           {/* أزرار تنقل جانبية للـ EPUB — الاتجاه يتبع لغة الكتاب */}
@@ -533,9 +689,8 @@ export function ReaderShell({ book }: { book: Book }) {
         <NoteEditor />
       </div>
 
-      {/* شريط تحكم سفلي للجوال في EPUB — تقليب مباشر وشريط موضع دائم الظهور
-          (طلب المستخدم: «في التليفون مفيش تحكم وتقليب صفحات») */}
-      {!isPdf && !zen && settingsLoaded && isMobilePlatform() && (
+      {/* شريط تحكم سفلي للجوال في EPUB — قابل للإخفاء من إعدادات التحكم */}
+      {!isPdf && !zen && settingsLoaded && isMobile && mp.bottomBar && (
         <footer className="flex h-[54px] shrink-0 items-center gap-1.5 border-t border-line bg-surface px-2 pb-[env(safe-area-inset-bottom,0px)] dark:border-dline dark:bg-dsurface">
           <IconButton title="السابق" onClick={() => engine.epub?.prev()}>
             {epubRtl ? <ChevronRight size={21} /> : <ChevronLeft size={21} />}

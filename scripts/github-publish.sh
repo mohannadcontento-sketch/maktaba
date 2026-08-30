@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO_DIR="/home/z/my-project/maktaba_repo"
 REPO="mohannadcontento-sketch/maktaba"
-VERSION="2.5.0"
+VERSION="2.6.0"
 TAG="v${VERSION}"
 
 : "${GITHUB_TOKEN:?ضع رمز الوصول: GITHUB_TOKEN=ghp_xxx bash scripts/github-publish.sh}"

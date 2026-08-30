@@ -3,7 +3,15 @@ import type { Lang } from '@/i18n'
 
 export type PageName = 'library' | 'stats' | 'settings' | 'reader'
 export type ThemeMode = 'light' | 'dark' | 'system'
-export type ReaderThemeName = 'day' | 'sepia' | 'night'
+export type ReaderThemeName =
+  | 'day'
+  | 'sepia'
+  | 'night'
+  | 'paper'
+  | 'green'
+  | 'rose'
+  | 'amber'
+  | 'slate'
 export type FlowMode = 'paginated' | 'scrolled'
 
 interface Toast {
