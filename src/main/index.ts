@@ -239,6 +239,8 @@ if (!gotLock) {
       wc.on('console-message', (_ev, _level, message) => {
         if (message.includes('RESUME-DEBUG') || message.includes('RESTORE-DEBUG')) {
           console.log('RENDERER:', message.slice(0, 300))
+        } else if (message.includes('epub') || message.includes('failed') || message.includes('warn') || message.includes('error')) {
+          console.log('RENDERER-LOG:', message.slice(0, 300))
         }
       })
     })

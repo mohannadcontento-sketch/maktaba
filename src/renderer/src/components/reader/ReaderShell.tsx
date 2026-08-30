@@ -11,9 +11,6 @@ import {
   Sun,
   Maximize2,
   Minimize2,
-  ZoomIn,
-  ZoomOut,
-  RotateCw,
   RotateCcw,
   Printer,
   Type,
@@ -349,64 +346,51 @@ export function ReaderShell({ book }: { book: Book }) {
 
           <div className="flex-1" />
 
-          {/* مؤشر الموضع */}
+          {/* مؤشر الموضع — EPUB فقط لـ PDF (شريط أكروبات السفلي فيه شريط التقدم) */}
           <div className="no-drag me-2 hidden items-center gap-2 md:flex">
             {isPdf ? (
               <span className="text-xs tabular-nums text-muted">
                 {t('reader.pageOf', { page: currentPage, total: totalPages })}
               </span>
             ) : (
-              remainingMin != null && (
-                <span className="text-xs tabular-nums text-muted">
-                  {t('reader.remainingMin', { min: remainingMin })}
-                </span>
-              )
+              <>
+                {remainingMin != null && (
+                  <span className="text-xs tabular-nums text-muted">
+                    {t('reader.remainingMin', { min: remainingMin })}
+                  </span>
+                )}
+                <div className="w-36">
+                  <input
+                    type="range"
+                    dir="ltr"
+                    min={0}
+                    max={100}
+                    step={0.5}
+                    value={percent}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      setPercent(v)
+                    }}
+                    onMouseUp={(e) => {
+                      const v = Number((e.target as HTMLInputElement).value)
+                      engine.epub?.displayAtPercent(v)
+                    }}
+                    onTouchEnd={(e) => {
+                      const v = Number((e.target as HTMLInputElement).value)
+                      engine.epub?.displayAtPercent(v)
+                    }}
+                    className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-gray-300 dark:bg-dline [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent dark:[&::-webkit-slider-thumb]:bg-daccent"
+                  />
+                </div>
+                <span className="text-xs tabular-nums font-medium">{Math.round(percent)}%</span>
+              </>
             )}
-            <div className="w-36">
-              <input
-                type="range"
-                dir="ltr"
-                min={0}
-                max={100}
-                step={0.5}
-                value={percent}
-                onChange={(e) => {
-                  const v = Number(e.target.value)
-                  setPercent(v)
-                  if (isPdf) engine.pdf?.scrollToPercent(v, false)
-                  // في EPUB نؤجل القفزة حتى نهاية السحب لأن كل قفزة تعيد رسم الصفحة
-                }}
-                onMouseUp={(e) => {
-                  const v = Number((e.target as HTMLInputElement).value)
-                  if (isPdf) engine.pdf?.scrollToPercent(v, true)
-                  else engine.epub?.displayAtPercent(v)
-                }}
-                onTouchEnd={(e) => {
-                  const v = Number((e.target as HTMLInputElement).value)
-                  if (isPdf) engine.pdf?.scrollToPercent(v, true)
-                  else engine.epub?.displayAtPercent(v)
-                }}
-                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-gray-300 dark:bg-dline [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent dark:[&::-webkit-slider-thumb]:bg-daccent"
-              />
-            </div>
-            <span className="text-xs tabular-nums font-medium">{Math.round(percent)}%</span>
           </div>
 
           {isPdf && (
-            <>
-              <IconButton title={t('reader.zoomOut')} onClick={() => engine.pdf?.zoomOut()}>
-                <ZoomOut size={17} />
-              </IconButton>
-              <IconButton title={t('reader.zoomIn')} onClick={() => engine.pdf?.zoomIn()}>
-                <ZoomIn size={17} />
-              </IconButton>
-              <IconButton title={t('reader.rotateCw')} onClick={() => engine.pdf?.rotate()}>
-                <RotateCw size={16} />
-              </IconButton>
-              <IconButton title={t('reader.print')} onClick={() => setPrintOpen(true)}>
-                <Printer size={16} />
-              </IconButton>
-            </>
+            <IconButton title={t('reader.print')} onClick={() => setPrintOpen(true)}>
+              <Printer size={16} />
+            </IconButton>
           )}
 
           <IconButton
@@ -653,6 +637,9 @@ function DisplayOptionsDrawer({
           </Button>
         ))}
       </div>
+      {settings.flow === 'scrolled' && (
+        <p className="mt-2 text-[11px] leading-relaxed text-muted">{t('reader.flowScrollHint')}</p>
+      )}
     </div>
   )
 }

@@ -4,7 +4,7 @@
  */
 import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js'
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
-import { readDataFile, writeDataFile } from './native'
+import { raceTimeout, readDataFile, writeDataFile } from './native'
 import type {
   Annotation,
   Book,
@@ -146,8 +146,9 @@ export async function persistNow(): Promise<void> {
 
 export async function openDb(): Promise<void> {
   if (db) return
-  const SQL = await initSqlJs({ locateFile: () => wasmUrl })
-  const existing = await readDataFile(DB_FILE)
+  // مهلة صريحة لتهيئة WASM — فشل مرئي بدل تجمّد صامت على أجهزة بطيئة
+  const SQL = await raceTimeout(initSqlJs({ locateFile: () => wasmUrl }), 15000, 'sql.js wasm init')
+  const existing = await raceTimeout(readDataFile(DB_FILE), 6000, 'read db file').catch(() => null)
   db = existing && existing.length ? new SQL.Database(existing) : new SQL.Database()
   db.run('PRAGMA foreign_keys = ON;')
   db.exec(SCHEMA)

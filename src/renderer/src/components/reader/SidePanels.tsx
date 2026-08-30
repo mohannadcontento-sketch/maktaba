@@ -34,7 +34,7 @@ export function SidePanel(props: PanelProps) {
     <aside className="flex h-full w-72 shrink-0 flex-col border-e border-line bg-surface2 dark:border-dline dark:bg-dsurface">
       <div className="flex items-center gap-1 border-b border-line px-2 py-2 dark:border-dline">
         <TabBtn active={panel === 'toc'} onClick={() => reader.setSidebarPanel('toc')} icon={<ListTree size={15} />} label="الفهرس" />
-        {!props.isPdf && (
+        {props.isPdf && (
           <TabBtn
             active={panel === 'thumbs'}
             onClick={() => reader.setSidebarPanel('thumbs')}
@@ -60,6 +60,7 @@ export function SidePanel(props: PanelProps) {
 
       <div className="flex-1 overflow-y-auto p-2">
         {panel === 'toc' && <TocList {...props} />}
+        {panel === 'thumbs' && props.isPdf && <PdfThumbs onGoToPage={props.onGoToPage} />}
         {panel === 'annotations' && (
           <AnnotationsList
             onJump={(loc) => {
@@ -420,6 +421,91 @@ export function SearchBar({ isPdf }: { isPdf: boolean }) {
             </button>
           ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+// ---------- مصغرات صفحات PDF (بنمط أكروبات) ----------
+interface PdfDocLike {
+  numPages: number
+  getPage(n: number): Promise<{
+    getViewport(o: { scale: number }): { width: number; height: number }
+    render(o: { canvasContext: CanvasRenderingContext2D; viewport: unknown }): { promise: Promise<void> }
+  }>
+}
+
+function PdfThumbs({ onGoToPage }: { onGoToPage(n: number): void }) {
+  const [pages, setPages] = useState<Array<{ n: number; url: string }>>([])
+  const [total, setTotal] = useState(0)
+  const [waitingDoc, setWaitingDoc] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      // انتظار جاهزية المستند — يوفره PdfReader عبر window.__pdfGetDoc
+      let doc: PdfDocLike | null = null
+      for (let i = 0; i < 60 && !cancelled; i++) {
+        doc = ((window as unknown as { __pdfGetDoc?: () => PdfDocLike | null }).__pdfGetDoc?.() ?? null) as PdfDocLike | null
+        if (doc) break
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      if (cancelled) return
+      if (!doc) {
+        setWaitingDoc(false)
+        return
+      }
+      setWaitingDoc(false)
+      setTotal(doc.numPages)
+      for (let n = 1; n <= doc.numPages; n++) {
+        if (cancelled) return
+        try {
+          const page = await doc.getPage(n)
+          const base = page.getViewport({ scale: 1 })
+          const scale = Math.min(0.35, 140 / Math.max(base.width, 1))
+          const vp = page.getViewport({ scale })
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.max(1, Math.floor(vp.width))
+          canvas.height = Math.max(1, Math.floor(vp.height))
+          const ctx = canvas.getContext('2d')!
+          ctx.fillStyle = '#ffffff'
+          ctx.fillRect(0, 0, canvas.width, canvas.height)
+          await page.render({ canvasContext: ctx, viewport: vp }).promise
+          if (cancelled) return
+          const url = canvas.toDataURL('image/jpeg', 0.72)
+          setPages((prev) => [...prev, { n, url }])
+        } catch {
+          /* صفحة لا ترسم — تخطَّها */
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return (
+    <div>
+      {waitingDoc && (
+        <div className="flex justify-center py-6">
+          <Spinner />
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        {pages.map(({ n, url }) => (
+          <button
+            key={n}
+            onClick={() => onGoToPage(n)}
+            className="group flex flex-col items-center gap-1 rounded-lg border border-line bg-white p-1 transition-all hover:ring-2 hover:ring-accent dark:border-dline"
+            title={`صفحة ${n}`}
+          >
+            <img src={url} alt={`ص${n}`} className="w-full" loading="lazy" />
+            <span className="text-[10px] tabular-nums text-muted group-hover:text-accent">{n}</span>
+          </button>
+        ))}
+      </div>
+      {!waitingDoc && !pages.length && total === 0 && (
+        <EmptyMini icon={<Images size={26} />} text="لا توجد معاينة متاحة الآن" />
       )}
     </div>
   )

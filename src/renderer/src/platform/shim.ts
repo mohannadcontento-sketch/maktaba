@@ -29,8 +29,20 @@ export async function installShim(): Promise<void> {
   if (installed) return
   installed = true
 
+  const guard = (window as unknown as { __mkBoot?: { stage(name: string): void } }).__mkBoot
+
+  guard?.stage('تهيئة مجلدات التطبيق…')
   await ensureDirs()
-  await db.openDb()
+
+  // فتح قاعدة البيانات — فشلها لا يمنع الإقلاع (وضع متدهور: مكتبة فارغة) لكن يُسجَّل دائمًا
+  guard?.stage('فتح قاعدة البيانات…')
+  try {
+    await db.openDb()
+  } catch (e) {
+    console.error('mobile db open failed', e)
+    guard?.stage(`تنبيه: تعذر فتح قاعدة البيانات (${(e as Error)?.message ?? 'خطأ'})`)
+    await new Promise((r) => setTimeout(r, 1200))
+  }
 
   // ---------- أدوات داخلية ----------
   const extOf = (name: string): 'pdf' | 'epub' | null => {

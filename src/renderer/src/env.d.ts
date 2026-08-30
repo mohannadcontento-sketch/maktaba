@@ -9,3 +9,14 @@ declare module 'epubjs/types/*' {
   const value: unknown
   export default value
 }
+
+interface BootGuardApi {
+  stage(name: string): void
+  done(): void
+  fail(e: unknown): void
+  isVisible(): boolean
+}
+
+interface Window {
+  __mkBoot?: BootGuardApi
+}

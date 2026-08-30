@@ -79,6 +79,33 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
   const [zoomPct, setZoomPct] = useState(100)
   const [rotation, setRotation] = useState(0)
   const [failed, setFailed] = useState(false)
+  // رقم الصفحة المعروض في شريط الأدوات السفلي (أكروبات)
+  const [pageDisp, setPageDisp] = useState(1)
+
+  // مرجع حي لنسبة التكبير — لقرص اللمس خارج دورة رندر React
+  const zoomPctRef = useRef(zoomPct)
+  useEffect(() => {
+    zoomPctRef.current = zoomPct
+  }, [zoomPct])
+
+  // مرجع حي لوضع الملاءمة — لقراءة التكبير الفعلي الحالي خارج الدورة
+  const fitModeRef = useRef(fitMode)
+  useEffect(() => {
+    fitModeRef.current = fitMode
+  }, [fitMode])
+
+  /** التكبير الفعلي الحالي بالنسبة المئوية (من المقياس المحسوب عند وضعي الملاءمة) */
+  const effectiveZoom = (): number => Math.round(scaleRef.current * 100)
+
+  /** الانتقال إلى تكبير مخصص انطلاقًا من الوضع الحالي (مثل أكروبات) */
+  const zoomStep = useCallback((delta: number): void => {
+    setFitMode('custom')
+    setZoomPct((z) => {
+      const base = fitModeRef.current === 'custom' ? z : effectiveZoom()
+      return clamp(Math.round((base + delta) / 5) * 5, 30, 400)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const scaleRef = useRef(1)
   const curPageRef = useRef(1)
@@ -88,6 +115,7 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
   const resumeTargetRef = useRef(1)
 
   // ---------- المقياس ----------
+  // ملاحظة: zoomPct نسبة مطلقة من الحجم الأصلي (مثل أدوبي أكروبات) — 100% = حجم المستند الفعلي
   const computeScale = useCallback((): number => {
     const el = containerRef.current
     const base = dims.current[0]
@@ -99,7 +127,7 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
     const h = rotated ? base.w : base.h
     if (fitMode === 'width') return clamp(availW / w, 0.1, 8)
     if (fitMode === 'page') return clamp(Math.min(availW / w, availH / h), 0.1, 8)
-    return clamp((zoomPct / 100) * Math.min(availW / w, availH / h), 0.1, 8)
+    return clamp(zoomPct / 100, 0.1, 8)
   }, [fitMode, rotation, zoomPct])
 
   const relayout = useCallback(() => {
@@ -124,13 +152,13 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
   }, [computeScale])
 
   const scrollToPageInternal = useCallback(
-    (n: number): void => {
+    (n: number, behavior: ScrollBehavior = 'smooth'): void => {
       const el = containerRef.current
       if (!el || !offsets.current.length) return
       // numPagesRef لا numPages: التأثيرات ذات deps [] تلتقط النسخة الأولى من هذه الدالة،
       // ولو استخدمنا حالة numPages لبقي clamp على 1 وأتت الاستعادة دائمًا للصفحة الأولى
       const idx = clamp(n, 1, Math.max(1, numPagesRef.current)) - 1
-      el.scrollTo({ top: Math.max(0, offsets.current[idx] - 14), behavior: 'smooth' })
+      el.scrollTo({ top: Math.max(0, offsets.current[idx] - 14), behavior })
     },
     []
   )
@@ -269,14 +297,8 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
           goToPage: (n) => scrollToPageInternal(n),
           nextPage: () => scrollToPageInternal(curPageRef.current + 1),
           prevPage: () => scrollToPageInternal(curPageRef.current - 1),
-          zoomIn: () => {
-            setFitMode('custom')
-            setZoomPct((z) => clamp(z + 15, 30, 400))
-          },
-          zoomOut: () => {
-            setFitMode('custom')
-            setZoomPct((z) => clamp(z - 15, 30, 400))
-          },
+          zoomIn: () => zoomStep(15),
+          zoomOut: () => zoomStep(-15),
           setFitWidth: () => setFitMode('width'),
           setFitPage: () => setFitMode('page'),
           rotate: () => setRotation((r) => (r + 90) % 360),
@@ -328,6 +350,7 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
             const ready = offsets.current.length >= resume && (offsets.current[resume - 1] ?? 0) > 0
             if (ready) {
               scrollToPageInternal(resume)
+              setPageDisp(resume)
               ui.toast('استؤنفت القراءة من آخر موضع', 'info')
               restoreDoneRef.current = true
             } else if (attempt < 40) {
@@ -426,6 +449,7 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
         if (p == null) return
         // لو حرّك المستخدم نفسه لموضع غير هدف الاستعادة نفتح الحفظ فورًا
         if (!restoreDoneRef.current && p !== resumeTargetRef.current) restoreDoneRef.current = true
+        setPageDisp(p)
         if (p !== curPageRef.current) {
           curPageRef.current = p
           maxReachedRef.current = Math.max(maxReachedRef.current, p)
@@ -466,12 +490,60 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
     const onWheel = (e: WheelEvent): void => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault()
+        const base = fitModeRef.current === 'custom' ? zoomPctRef.current : Math.round(scaleRef.current * 100)
         setFitMode('custom')
-        setZoomPct((z) => clamp(z - e.deltaY * 0.25, 30, 400))
+        setZoomPct(clamp(Math.round(base - e.deltaY * 0.25), 30, 400))
       }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // تكبير بالقرص (قرص بإصبعين) على شاشات اللمس — مثل أكروبات
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    let pinch: { dist: number; pct: number } | null = null
+    let raf = 0
+    let pendingRatio = 1
+    const distOf = (t: TouchList): number => {
+      const a = t[0]
+      const b = t[1]
+      return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+    }
+    const apply = (): void => {
+      raf = 0
+      setFitMode('custom')
+      setZoomPct(clamp(pinch!.pct * pendingRatio, 30, 400))
+    }
+    const onTouchStart = (e: TouchEvent): void => {
+      if (e.touches.length === 2) {
+        // قاعدة القرص = التكبير الفعلي الحالي (سواء كنا في fit-width أو custom)
+        const base = fitModeRef.current === 'custom' ? zoomPctRef.current : Math.round(scaleRef.current * 100)
+        pinch = { dist: distOf(e.touches), pct: base }
+      }
+    }
+    const onTouchMove = (e: TouchEvent): void => {
+      if (pinch && e.touches.length === 2) {
+        e.preventDefault()
+        pendingRatio = distOf(e.touches) / Math.max(1, pinch.dist)
+        if (!raf) raf = requestAnimationFrame(apply)
+      }
+    }
+    const onTouchEnd = (): void => {
+      pinch = null
+    }
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: false })
+    el.addEventListener('touchend', onTouchEnd, { passive: true })
+    el.addEventListener('touchcancel', onTouchEnd, { passive: true })
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('touchend', onTouchEnd)
+      el.removeEventListener('touchcancel', onTouchEnd)
+    }
   }, [])
 
   // تصحيح أبعاد الصفحات غير الموحدة تدريجيًا
@@ -662,55 +734,248 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
   }, [searchActive])
 
   return (
-    <div
-      ref={containerRef}
-      className={cn(
-        'relative flex-1 overflow-auto bg-[#454a52] outline-none dark:bg-[#101216]',
-        reader.nightInvert && 'pdf-night'
-      )}
-      onMouseUp={onMouseUp}
-      tabIndex={-1}
-    >
-      {failed ? (
-        <div className="flex h-full flex-col items-center justify-center gap-2 text-white/85">
-          <p className="text-lg font-semibold">تعذر فتح هذا الملف</p>
-          <p className="text-sm opacity-70">قد يكون تالفًا أو محميًا بكلمة مرور</p>
-        </div>
-      ) : (
-        <div ref={wrapRef} className="relative" style={{ width: '100%' }}>
-          {Array.from({ length: numPages }, (_, i) => {
-            const n = i + 1
-            return (
-              <div
-                key={n}
-                data-pdf-page={n}
-                ref={(el) => {
-                  if (el) pageEls.current.set(n, el)
-                  else pageEls.current.delete(n)
-                }}
-                className="absolute shadow-[0_2px_16px_rgba(0,0,0,0.35)]"
-                style={{ backgroundColor: '#fff', top: offsets.current[i], left: 'calc(50% - 200px)' }}
-              >
-                <AnnotationOverlay
-                  annotations={annotationsByPage.get(n)}
-                  night={reader.nightInvert}
-                  boxes={reader.search.boxes}
-                  matchIndexes={reader.search.matches
-                    .map((m, idx) => ({ m, idx }))
-                    .filter(({ m }) => m.page === n)
-                    .map(({ m, idx }) => ({ boxIndex: m.boxIndex, globalIdx: idx }))}
-                  activeGlobalIdx={searchActive}
-                  onDelete={(id) => void reader.deleteAnnotation(id)}
-                  onEditNote={(a) =>
-                    reader.setNoteEditor(reader.annotations.find((x) => x.id === a.id) ?? null)
-                  }
-                />
-              </div>
-            )
-          })}
-        </div>
-      )}
+    <div className="flex h-full min-w-0 flex-1 flex-col">
+      <div
+        ref={containerRef}
+        className={cn(
+          'relative min-h-0 flex-1 overflow-auto bg-[#454a52] outline-none dark:bg-[#101216]',
+          reader.nightInvert && 'pdf-night'
+        )}
+        onMouseUp={onMouseUp}
+        tabIndex={-1}
+      >
+        {failed ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-white/85">
+            <p className="text-lg font-semibold">تعذر فتح هذا الملف</p>
+            <p className="text-sm opacity-70">قد يكون تالفًا أو محميًا بكلمة مرور</p>
+          </div>
+        ) : (
+          <div ref={wrapRef} className="relative" style={{ width: '100%' }}>
+            {Array.from({ length: numPages }, (_, i) => {
+              const n = i + 1
+              return (
+                <div
+                  key={n}
+                  data-pdf-page={n}
+                  ref={(el) => {
+                    if (el) pageEls.current.set(n, el)
+                    else pageEls.current.delete(n)
+                  }}
+                  className="absolute shadow-[0_2px_16px_rgba(0,0,0,0.35)]"
+                  style={{ backgroundColor: '#fff', top: offsets.current[i], left: 'calc(50% - 200px)' }}
+                >
+                  <AnnotationOverlay
+                    annotations={annotationsByPage.get(n)}
+                    night={reader.nightInvert}
+                    boxes={reader.search.boxes}
+                    matchIndexes={reader.search.matches
+                      .map((m, idx) => ({ m, idx }))
+                      .filter(({ m }) => m.page === n)
+                      .map(({ m, idx }) => ({ boxIndex: m.boxIndex, globalIdx: idx }))}
+                    activeGlobalIdx={searchActive}
+                    onDelete={(id) => void reader.deleteAnnotation(id)}
+                    onEditNote={(a) =>
+                      reader.setNoteEditor(reader.annotations.find((x) => x.id === a.id) ?? null)
+                    }
+                  />
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* شريط أدوات سفلي بنمط أدوبي أكروبات */}
+      <PdfToolbar
+        page={pageDisp}
+        numPages={numPages}
+        fitMode={fitMode}
+        zoomLabel={fitMode === 'custom' ? zoomPct : Math.round(computeScale() * 100)}
+        disabled={failed || !numPages}
+        onPrev={() => scrollToPageInternal(curPageRef.current - 1)}
+        onNext={() => scrollToPageInternal(curPageRef.current + 1)}
+        onGoToPage={(n, instant) => scrollToPageInternal(n, instant ? 'auto' : 'smooth')}
+        onZoomIn={() => zoomStep(10)}
+        onZoomOut={() => zoomStep(-10)}
+        onZoomReset={() => {
+          setFitMode('custom')
+          setZoomPct(100)
+        }}
+        onFitWidth={() => setFitMode('width')}
+        onFitPage={() => setFitMode('page')}
+      />
     </div>
+  )
+}
+
+// ---------- شريط الأدوات السفلي (أكروبات) ----------
+function PdfToolbar({
+  page,
+  numPages,
+  fitMode,
+  zoomLabel,
+  disabled,
+  onPrev,
+  onNext,
+  onGoToPage,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
+  onFitWidth,
+  onFitPage
+}: {
+  page: number
+  numPages: number
+  fitMode: 'width' | 'page' | 'custom'
+  zoomLabel: number
+  disabled: boolean
+  onPrev(): void
+  onNext(): void
+  onGoToPage(n: number, instant?: boolean): void
+  onZoomIn(): void
+  onZoomOut(): void
+  onZoomReset(): void
+  onFitWidth(): void
+  onFitPage(): void
+}) {
+  const [editing, setEditing] = useState('')
+  const pct = numPages ? clamp((page / numPages) * 100, 0, 100) : 0
+
+  const commitPage = (): void => {
+    const n = parseInt(editing, 10)
+    setEditing('')
+    if (!Number.isNaN(n) && n >= 1 && n <= numPages) onGoToPage(n)
+  }
+
+  return (
+    <div className="shrink-0 border-t border-line bg-surface px-2 pb-[max(0.25rem,env(safe-area-inset-bottom))] pt-1.5 dark:border-dline dark:bg-dsurface">
+      {/* شريط التقدم */}
+      <input
+        type="range"
+        dir="ltr"
+        min={0}
+        max={100}
+        step={0.1}
+        value={pct}
+        disabled={disabled}
+        onChange={(e) => {
+          const target = Math.max(1, Math.round((Number(e.target.value) / 100) * Math.max(1, numPages)))
+          onGoToPage(target, true)
+        }}
+        className="mb-1 h-1.5 w-full cursor-pointer appearance-none rounded-full bg-gray-300 dark:bg-dline [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent dark:[&::-webkit-slider-thumb]:bg-daccent"
+      />
+      <div className="flex items-center gap-1.5" dir="ltr">
+        {/* تنقل الصفحات */}
+        <ToolBtn disabled={disabled || page <= 1} onClick={onPrev} title="الصفحة السابقة">
+          <ChevronLeftLtr />
+        </ToolBtn>
+        <div className="flex items-center gap-1 rounded-lg border border-line bg-surface2 px-2 py-1 dark:border-dline dark:bg-dsurface2">
+          <input
+            className="w-10 bg-transparent text-center text-xs font-semibold tabular-nums outline-none"
+            placeholder={String(page)}
+            value={editing}
+            disabled={disabled}
+            inputMode="numeric"
+            dir="ltr"
+            onChange={(e) => setEditing(e.target.value.replace(/[^\d]/g, ''))}
+            onBlur={commitPage}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }}
+            title="اكتب رقم الصفحة واضغط Enter"
+          />
+          <span className="text-xs tabular-nums text-muted">/ {numPages || '—'}</span>
+        </div>
+        <ToolBtn disabled={disabled || page >= numPages} onClick={onNext} title="الصفحة التالية">
+          <ChevronRightLtr />
+        </ToolBtn>
+
+        <span className="mx-1 h-5 w-px bg-line dark:bg-dline" />
+
+        {/* التكبير */}
+        <ToolBtn disabled={disabled} onClick={onZoomOut} title="تصغير القراءة">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3M8 11h6" strokeLinecap="round" />
+          </svg>
+        </ToolBtn>
+        <button
+          disabled={disabled}
+          onClick={onZoomReset}
+          className="min-w-[46px] rounded-lg px-1.5 py-1 text-xs font-semibold tabular-nums text-ink transition-colors hover:bg-black/5 dark:text-gray-200 dark:hover:bg-white/10"
+          title="إرجاع التكبير إلى 100%"
+        >
+          {zoomLabel}%
+        </button>
+        <ToolBtn disabled={disabled} onClick={onZoomIn} title="تكبير القراءة">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3M8 11h6M11 8v6" strokeLinecap="round" />
+          </svg>
+        </ToolBtn>
+
+        {/* ملاءمة */}
+        <ToolBtn active={fitMode === 'width'} disabled={disabled} onClick={onFitWidth} title="ملاءمة العرض">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 12h18M6 9l-3 3 3 3M18 9l3 3-3 3" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </ToolBtn>
+        <ToolBtn active={fitMode === 'page'} disabled={disabled} onClick={onFitPage} title="ملاءمة الصفحة كاملة">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="4" y="3" width="16" height="18" rx="2" />
+            <path d="M4 8h16M4 16h16" opacity="0.5" />
+          </svg>
+        </ToolBtn>
+      </div>
+    </div>
+  )
+}
+
+function ToolBtn({
+  children,
+  onClick,
+  title,
+  disabled,
+  active
+}: {
+  children: React.ReactNode
+  onClick(): void
+  title: string
+  disabled?: boolean
+  active?: boolean
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={cn(
+        'flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
+        active
+          ? 'bg-accent/12 text-accent-strong dark:bg-daccent/15 dark:text-daccent'
+          : 'text-ink hover:bg-black/5 dark:text-gray-200 dark:hover:bg-white/10',
+        disabled && 'cursor-default opacity-35'
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** أسهم تنقل الصفحات — الاتجاه دائمًا كالمستند (يسار = السابق) */
+function ChevronLeftLtr(): React.ReactNode {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function ChevronRightLtr(): React.ReactNode {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }
 

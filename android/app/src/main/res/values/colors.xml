@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ألوان التطبيق — لون خلفية النافذة يطابق خلفية الواجهة (#0f1115) بدل الأسود/الازدراب الافتراضي -->
+    <color name="mkWindowBackground">#0F1115</color>
+    <color name="colorPrimary">#14B8A6</color>
+    <color name="colorPrimaryDark">#0F1115</color>
+    <color name="colorAccent">#14B8A6</color>
+</resources>

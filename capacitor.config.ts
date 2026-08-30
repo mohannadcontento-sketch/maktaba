@@ -5,7 +5,9 @@ const config: CapacitorConfig = {
   appName: 'مكتبة',
   webDir: 'dist-mobile',
   android: {
-    allowMixedContent: false
+    allowMixedContent: false,
+    // السماح بفحص WebView من chrome://inspect — ضروري لتشخيص مشاكل الجهاز
+    webContentsDebuggingEnabled: true
   }
 }
 

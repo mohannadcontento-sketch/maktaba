@@ -18,6 +18,9 @@ export default defineConfig({
       }
     },
     build: {
+      // هدف متوافق مع Android System WebView الحديث/شبه القديم:
+      // esbuild يحوّل الصياغة الحديثة (??=، ?.، حقول الأصناف…) لصياغة أوسع دعمًا
+      target: ['chrome89', 'firefox90', 'safari14'],
       rollupOptions: {
         output: {
           manualChunks: {

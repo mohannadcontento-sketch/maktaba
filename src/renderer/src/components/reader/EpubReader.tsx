@@ -74,6 +74,7 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
   const lastPctRef = useRef(0)
   const pendingPercentRef = useRef<number | null>(null)
   const flowRef = useRef(settings.flow)
+  const isContinuousRef = useRef(false)
   const rtlRef = useRef(isRtlLang(book.language))
   const flipCooldownRef = useRef(0)
 
@@ -110,7 +111,9 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
     const weight = s.fontFamily === 'tajawal-bold' ? '700' : '400'
     // ملاحظة: الهوامش تُطبق على حاوية التطبيق نفسها (wrapper) وليس على body الكتاب
     // لأن padding بالنسب المئوية لا يعمل بشكل صحيح في تخطيط الأعمدة (paginated) الخاص بـ epub.js
-    return `\n      ${fontFaces}\n      body { font-family: ${family} !important; font-weight: ${weight} !important; }\n      p, li, div { line-height: ${s.lineHeight} !important; }\n      p { text-align: ${align} !important; }\n      img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n    `
+    // المحاذاة تُفرض على كل العناصر الكتلية + الجذر — كثير من الكتب تستخدم div بدل p
+    // وتحمل أنماطها الخاصة فكانت الإعدادات تبدو «لا تعمل»
+    return `\n      ${fontFaces}\n      body { font-family: ${family} !important; font-weight: ${weight} !important; }\n      p, li, div { line-height: ${s.lineHeight} !important; }\n      body, p, div, li, blockquote, figcaption, dd, dt, td, th, h1, h2, h3, h4, h5, h6 { text-align: ${align} !important; }\n      img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n    `
   }, [])
 
   const attachedIdsRef = useRef(new Set<string>())
@@ -161,7 +164,9 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
     return (v.querySelector('.epub-container') as HTMLElement | null) ?? v
   }, [])
 
-  // حساب النسبة في وضع التمرير: (مؤشر القسم الحالي + نسبة التمرير داخله) / عدد الأقسام
+  // حساب النسبة في وضع التمرير:
+  // - المدير continuous: التمرير يشمل الكتاب كله → النسبة = جزء التمرير مباشرة
+  // - scrolled-doc داخل مدير افتراضي: (مؤشر القسم + نسبة التمرير داخله) / الأقسام
   const reportScrollProgress = useCallback((immediate = false): void => {
     const el = scrollerEl()
     const b = bookRef.current
@@ -170,7 +175,11 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
     const frac = max > 0 ? clamp(el.scrollTop / max, 0, 1) : 0
     const total = spineCount()
     const idx = lastSpineIndexRef.current
-    const pct = total ? clamp(((idx + frac) / total) * 100, 0, 100) : lastPctRef.current
+    const pct = isContinuousRef.current
+      ? clamp(frac * 100, 0, 100)
+      : total
+        ? clamp(((idx + frac) / total) * 100, 0, 100)
+        : lastPctRef.current
     lastPctRef.current = pct
     const cfi = lastCfiRef.current
     if (!cfi) return
@@ -305,14 +314,21 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
         const epubBook = ePub(buf)
         bookRef.current = epubBook
 
+        // وضع التمرير = مدير continuous (الكتاب كله تحت بعضه في تمرير واحد عمودي)
+        // وضع الصفحات = المدير الافتراضي paginated
+        const useContinuous = settings.flow === 'scrolled'
+        isContinuousRef.current = useContinuous
+        flowRef.current = settings.flow
         rel = epubBook.renderTo(viewerRef.current!, {
           width: '100%',
           height: '100%',
-          flow: settings.flow === 'scrolled' ? 'scrolled-doc' : 'paginated',
+          manager: useContinuous ? 'continuous' : 'default',
+          flow: useContinuous ? 'scrolled-continuous' : 'paginated',
           spread: 'none',
           // لا فجوات داخلية بين الأعمدة — النص يملأ العرض المتاح
           // والهوامش يتحكم فيها المستخدم من الإعدادات وتُطبق على منطقة النص نفسها
-          gap: 0
+          gap: 0,
+          allowScriptedContent: false
         } as Parameters<EpubBook['renderTo']>[1])
         renditionRef.current = rel
         registerThemeHook(rel)
@@ -498,11 +514,36 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
           handleEpubSelection(cfiRange, contents)
         })
 
-        // إعادة رسم التعليقات المحفوظة
+        // إعادة رسم التعليقات المحفوظة (وأيضًا بعد إعادة بناء القارئ عند تبديل وضع العرض)
         for (const a of useReader.getState().annotations) {
           if (!a.cfi || attachedIdsRef.current.has(a.id)) continue
           attachEpubAnnotation(rel, a.type, a.cfi, a.color)
           attachedIdsRef.current.add(a.id)
+        }
+        // إعادة رسم نتائج البحث بعد إعادة البناء
+        const st = useReader.getState()
+        if (st.epubMatches.length) {
+          for (const m of st.epubMatches) {
+            try {
+              rel.annotations.add(
+                'highlight',
+                m.cfi,
+                {},
+                () => {},
+                `sr-${Math.random().toString(36).slice(2)}`,
+                {
+                  fill: '#38bdf8',
+                  'fill-opacity': '0.3',
+                  stroke: '#38bdf8',
+                  'stroke-opacity': '0.55',
+                  'mix-blend-mode': 'multiply'
+                }
+              )
+              searchHighlightsRef.current.push(m.cfi)
+            } catch {
+              /* تجاهل */
+            }
+          }
         }
 
         setReady(true)
@@ -558,9 +599,15 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
       }
       renditionRef.current = null
       bookRef.current = null
+      // القارئ الجديد يبدأ من الصفر — التعليقات/نتائج البحث تُعاد رسمها في التهيئة
+      attachedIdsRef.current.clear()
+      searchHighlightsRef.current = []
+      setReady(false)
     }
+    // يعاد البناء عند تبديل وضع العرض (paginated ↔ scrolled-continuous)
+    // لأن مدير العرض (default/continuous) لا يمكن تبديله أثناء التشغيل
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [settings.flow])
 
   // مستمع التمرير لوضع scrolled — تحديث النسبة أثناء التمرير
   useEffect(() => {
@@ -691,31 +738,87 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
     prevAnnsRef.current = reader.annotations.map((a) => ({ id: a.id, cfi: a.cfi, type: a.type }))
   }, [reader.annotations, ready])
 
-  // تطبيق تغييرات الإعدادات فورًا + تبديل وضع العرض عبر rel.flow() الرسمي
+  // تطبيق تغييرات الإعدادات فورًا
+  // الهوامش/الخط/تباعد الأسطر = إعادة تخطيط كاملة للأعمدة (rel.resize)
+  // حتى يتحرك النص ويلتف مثل «الورد» — بدل بقاء الأعمدة بعرض قديم
+  // فتختفي أجزاء من الكلام تحت الهوامش (مشكلة الإزاحة التي يغطي على الكلام)
+  const geomKey = `${settings.marginLeft}:${settings.marginRight}:${settings.marginTop}:${settings.marginBottom}:${settings.fontSize}:${settings.lineHeight}:${settings.fontFamily}`
+  const prevGeomKeyRef = useRef<string | null>(null)
   useEffect(() => {
     const rel = renditionRef.current
-    if (!rel || !ready) return
+    if (!rel || !ready) {
+      prevGeomKeyRef.current = geomKey
+      return
+    }
+    flowRef.current = settings.flow
     applyAllThemes(rel, settings)
     rel.themes.fontSize(`${settings.fontSize}%`)
-    if (settings.flow !== flowRef.current) {
-      flowRef.current = settings.flow
-      try {
-        // epub.js يوفر تبديلًا رسميًا للوضع: يعدّل المحور و overflow الحاوية
-        rel.flow(settings.flow === 'scrolled' ? 'scrolled-doc' : 'paginated')
-        void rel.display(lastCfiRef.current ?? undefined)
-      } catch (e) {
-        console.warn('flow switch failed', e)
+    if (prevGeomKeyRef.current !== geomKey) {
+      const first = prevGeomKeyRef.current === null
+      prevGeomKeyRef.current = geomKey
+      if (!first) {
+        // إعادة تخطيط ثم العودة لنفس الموضع القرائي
+        // ('100%' نصيًا — epub.js يقبلها داخليًا رغم التوقيع الرقمي في التعريفات)
+        try {
+          ;(rel as unknown as { resize(w: unknown, h: unknown): void }).resize('100%', '100%')
+        } catch (e) {
+          console.warn('epub resize failed', e)
+        }
+        setTimeout(() => {
+          try {
+            void renditionRef.current?.display(lastCfiRef.current ?? undefined)
+          } catch {
+            /* ignore */
+          }
+        }, 60)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings, ready])
+  }, [settings, ready, geomKey])
 
   const isScrolled = settings.flow === 'scrolled'
+
+  // خطاف تشخيصي للاختبارات — وضع العرض الحالي ونوع المدير
+  useEffect(() => {
+    ;(window as unknown as { __epubFlowInfo?: () => { flow: string; continuous: boolean; ready: boolean } }).__epubFlowInfo = () => ({
+      flow: flowRef.current,
+      continuous: isContinuousRef.current,
+      ready
+    })
+    return () => {
+      delete (window as unknown as { __epubFlowInfo?: unknown }).__epubFlowInfo
+    }
+  }, [ready])
+
+  // ---------- سحب باللمس لقلب الصفحات (وضع الصفحات فقط) ----------
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
+  const onTouchStart = useCallback((e: React.TouchEvent): void => {
+    if (flowRef.current !== 'paginated') return
+    const t = e.touches[0]
+    touchStartRef.current = { x: t.clientX, y: t.clientY }
+  }, [])
+  const onTouchEnd = useCallback((e: React.TouchEvent): void => {
+    if (flowRef.current !== 'paginated') return
+    const start = touchStartRef.current
+    touchStartRef.current = null
+    if (!start) return
+    const t = e.changedTouches[0]
+    const dx = t.clientX - start.x
+    const dy = t.clientY - start.y
+    // سحب أفقي واضح فقط — لا نعترض التمرير العمودي
+    if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.4) return
+    // LTR: السحب لليسار = التالي. RTL (كتب عربية): السحب لليمين = التالي
+    const toNext = rtlRef.current ? dx > 0 : dx < 0
+    if (toNext) nextRef.current()
+    else prevRef.current()
+  }, [])
 
   return (
     <div
       className="relative flex-1 overflow-hidden"
       style={{ background: THEME_BG[settings.theme] ?? '#ffffff' }}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
     >
       {failed ? (
         <div className="flex h-full flex-col items-center justify-center gap-2">

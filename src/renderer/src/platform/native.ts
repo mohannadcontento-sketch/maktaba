@@ -9,9 +9,30 @@ import type { FetchAdapter } from '../../../shared/coverEngines'
 export const LIB_DIR = 'library'
 export const COVERS_DIR = 'covers'
 
+/** سباق وعد مع مهلة زمنية — يمنع تعليق الإقلاع على جسر أصلي عالق */
+export function raceTimeout<T>(p: Promise<T>, ms: number, label = 'op'): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`timeout: ${label} (${ms}ms)`)), ms)
+    p.then(
+      (v) => {
+        clearTimeout(t)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(t)
+        reject(e)
+      }
+    )
+  })
+}
+
 export async function ensureDirs(): Promise<void> {
   for (const dir of [LIB_DIR, COVERS_DIR]) {
-    await Filesystem.mkdir({ path: dir, directory: Directory.Data, recursive: true }).catch(() => {})
+    await raceTimeout(
+      Filesystem.mkdir({ path: dir, directory: Directory.Data, recursive: true }).catch(() => {}),
+      6000,
+      `mkdir ${dir}`
+    ).catch(() => {})
   }
 }
 
