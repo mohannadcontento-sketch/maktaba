@@ -21,6 +21,8 @@ export interface MobilePrefs {
   autoScrollSpeed: number
   /** فعل النقر على منتصف الصفحة */
   centerAction: 'zen' | 'settings'
+  /** ملاءمة صفحة PDF على الجوال: عرض الشاشة (حتى الحواف) أو صفحة كاملة */
+  pdfFit: 'width' | 'page'
 }
 
 export const DEFAULT_MOBILE_PREFS: MobilePrefs = {
@@ -31,7 +33,8 @@ export const DEFAULT_MOBILE_PREFS: MobilePrefs = {
   keepAwake: true,
   flipAnim: 'slide',
   autoScrollSpeed: 3,
-  centerAction: 'zen'
+  centerAction: 'zen',
+  pdfFit: 'width'
 }
 
 interface MobilePrefsState {

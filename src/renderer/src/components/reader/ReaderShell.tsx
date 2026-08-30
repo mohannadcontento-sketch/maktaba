@@ -27,7 +27,7 @@ import type { EpubHandle, TocEntry } from './EpubReader'
 import type { EpubSearchMatch } from '@/lib/epubSearch'
 import { EpubReader } from './EpubReader'
 import { SidePanel, SearchBar } from './SidePanels'
-import { MoonSheet, MoonStatusBar, MoonBrightnessEdge } from './MoonMobile'
+import { MoonSheet, MoonStatusBar, MoonBrightnessEdge, MoonTapFlash } from './MoonMobile'
 import { useMobilePrefs } from '@/stores/mobilePrefs'
 import { setVolumeKeys, setImmersive, setKeepAwake } from '@/platform/mkNative'
 import { SelectionPopover } from './SelectionPopover'
@@ -139,13 +139,18 @@ export function ReaderShell({ book }: { book: Book }) {
     void setImmersive(reader.zenMode)
   }, [isMobile, reader.zenMode])
 
-  // التمرير التلقائي — يقلب الصفحات على مهل حسب السرعة (EPUB و PDF معًا)
+  // التمرير التلقائي — EPUB: يقلب الصفحات على مهل / PDF: تمرير سلس داخل العارض نفسه (v2.7)
   useEffect(() => {
     if (!autoScrollOn) return
     const secs = [10, 8, 6.5, 5, 4, 3, 2.5, 2, 1.5, 1][Math.max(1, Math.min(10, mp.autoScrollSpeed)) - 1]
+    if (isPdf) {
+      engine.pdf?.setAutoScroll?.(true, secs)
+      return () => {
+        engine.pdf?.setAutoScroll?.(false, secs)
+      }
+    }
     const iv = setInterval(() => {
-      if (isPdf) engine.pdf?.nextPage()
-      else engine.epub?.next()
+      engine.epub?.next()
     }, secs * 1000)
     return () => clearInterval(iv)
   }, [autoScrollOn, mp.autoScrollSpeed, isPdf, engine])
@@ -447,14 +452,20 @@ export function ReaderShell({ book }: { book: Book }) {
 
           <span className="mx-2 h-6 w-px bg-line dark:bg-dline" />
 
-          {/* الفهرس والمصغرات والبحث والطباعة يقودها عارض موزيلا نفسه في PDF */}
-          {!zen && !isPdf && (
+          {/* الفهرس: EPUB دائمًا — PDF على الجوال فقط (شريط موزيلا مخفي في وضع Moon+) */}
+          {!zen && (!isPdf || isMobile) && (
             <IconButton title="اللوحة الجانبية" active={!!reader.sidebarPanel} onClick={() => reader.setSidebarPanel(reader.sidebarPanel === 'toc' ? null : 'toc')}>
               <ListTree size={17} />
             </IconButton>
           )}
           {!isPdf && (
             <IconButton title={t('reader.searchDoc')} active={reader.searchOpen} onClick={() => reader.toggleSearch()}>
+              <Search size={17} />
+            </IconButton>
+          )}
+          {/* البحث في PDF على الجوال: شريط البحث الرسمي داخل العارض */}
+          {isPdf && isMobile && (
+            <IconButton title="بحث في الكتاب" onClick={() => void engine.pdf?.runSearch('')}>
               <Search size={17} />
             </IconButton>
           )}
@@ -653,6 +664,9 @@ export function ReaderShell({ book }: { book: Book }) {
               )
             ))}
 
+          {/* فلاش بصري عند لمس مناطق التنقل — على طريقة Moon+ (جوال فقط) */}
+          {isMobile && <MoonTapFlash />}
+
           {/* قرص إيقاف التمرير التلقائي */}
           {isMobile && autoScrollOn && (
             <button
@@ -689,11 +703,11 @@ export function ReaderShell({ book }: { book: Book }) {
         <NoteEditor />
       </div>
 
-      {/* شريط تحكم سفلي للجوال في EPUB — قابل للإخفاء من إعدادات التحكم */}
-      {!isPdf && !zen && settingsLoaded && isMobile && mp.bottomBar && (
+      {/* شريط تحكم سفلي للجوال — EPUB و PDF معًا (v2.7) — قابل للإخفاء من إعدادات التحكم */}
+      {!zen && isMobile && mp.bottomBar && (isPdf || settingsLoaded) && (
         <footer className="flex h-[54px] shrink-0 items-center gap-1.5 border-t border-line bg-surface px-2 pb-[env(safe-area-inset-bottom,0px)] dark:border-dline dark:bg-dsurface">
-          <IconButton title="السابق" onClick={() => engine.epub?.prev()}>
-            {epubRtl ? <ChevronRight size={21} /> : <ChevronLeft size={21} />}
+          <IconButton title="السابق" onClick={() => (isPdf ? engine.pdf?.prevPage() : engine.epub?.prev())}>
+            {isPdf ? <ChevronLeft size={21} /> : epubRtl ? <ChevronRight size={21} /> : <ChevronLeft size={21} />}
           </IconButton>
           <input
             type="range"
@@ -705,17 +719,20 @@ export function ReaderShell({ book }: { book: Book }) {
             onChange={(e) => setPercent(Number(e.target.value))}
             onMouseUp={(e) => {
               const v = Number((e.target as HTMLInputElement).value)
-              engine.epub?.displayAtPercent(v)
+              if (isPdf) engine.pdf?.scrollToPercent(v)
+              else engine.epub?.displayAtPercent(v)
             }}
             onTouchEnd={(e) => {
               const v = Number((e.target as HTMLInputElement).value)
-              engine.epub?.displayAtPercent(v)
+              if (isPdf) engine.pdf?.scrollToPercent(v)
+              else engine.epub?.displayAtPercent(v)
             }}
+            data-testid="moon-footer-seek"
             className="h-1.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-gray-300 dark:bg-dline [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent dark:[&::-webkit-slider-thumb]:bg-daccent"
           />
           <span className="w-9 shrink-0 text-center text-[11px] tabular-nums font-semibold">{Math.round(percent)}%</span>
-          <IconButton title="التالي" onClick={() => engine.epub?.next()}>
-            {epubRtl ? <ChevronLeft size={21} /> : <ChevronRight size={21} />}
+          <IconButton title="التالي" onClick={() => (isPdf ? engine.pdf?.nextPage() : engine.epub?.next())}>
+            {isPdf ? <ChevronRight size={21} /> : epubRtl ? <ChevronLeft size={21} /> : <ChevronRight size={21} />}
           </IconButton>
         </footer>
       )}

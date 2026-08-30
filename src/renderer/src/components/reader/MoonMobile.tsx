@@ -11,7 +11,9 @@ import {
   Moon,
   Bookmark,
   Battery,
-  BatteryLow
+  BatteryLow,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -241,6 +243,31 @@ export function MoonSheet({
               onToggle={() => mpSet({ keepAwake: !mp.keepAwake })}
             />
 
+            {/* الجوال v2.7: ملاءمة صفحة PDF — حتى حواف الشاشة افتراضيًا */}
+            {isPdf && (
+              <>
+                <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted">ملاءمة صفحة PDF</p>
+                <div className="mb-3 grid grid-cols-2 gap-1.5">
+                  {(
+                    [
+                      { id: 'width', label: 'حتى حواف الشاشة' },
+                      { id: 'page', label: 'صفحة كاملة' }
+                    ] as const
+                  ).map((o) => (
+                    <Button
+                      key={o.id}
+                      size="sm"
+                      variant={mp.pdfFit === o.id ? 'primary' : 'outline'}
+                      onClick={() => mpSet({ pdfFit: o.id })}
+                      data-testid={`moon-pdffit-${o.id}`}
+                    >
+                      {o.label}
+                    </Button>
+                  ))}
+                </div>
+              </>
+            )}
+
             <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted">حركة قلب الصفحة</p>
             <div className="mb-3 grid grid-cols-2 gap-1.5">
               {(['slide', 'none'] as const).map((a) => (
@@ -469,5 +496,42 @@ export function MoonBrightnessEdge(): React.ReactNode {
         </div>
       )}
     </>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* فلاش بصري عند لمس مناطق التنقل — سهم خفيف يظهر لحظة اللمس (v2.7)    */
+/* ------------------------------------------------------------------ */
+export function MoonTapFlash(): React.ReactNode {
+  const [flash, setFlash] = useState<{ side: 'left' | 'right'; acted: string } | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    const on = (e: Event): void => {
+      const d = (e as CustomEvent).detail as { acted: string; rx?: number }
+      if (!d || (d.acted !== 'prev' && d.acted !== 'next')) return
+      const side = (d.rx ?? 0.5) < 0.5 ? 'left' : 'right'
+      setFlash({ side, acted: d.acted })
+      if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => setFlash(null), 420)
+    }
+    window.addEventListener('mk-tapzone', on)
+    return () => {
+      window.removeEventListener('mk-tapzone', on)
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
+  }, [])
+
+  if (!flash) return null
+  return (
+    <div
+      data-testid="moon-tapflash"
+      className={cn(
+        'pointer-events-none absolute top-1/2 z-40 -translate-y-1/2 rounded-full bg-black/20 p-3 text-white/90',
+        flash.side === 'left' ? 'left-5' : 'right-5'
+      )}
+    >
+      {flash.side === 'left' ? <ChevronLeft size={22} /> : <ChevronRight size={22} />}
+    </div>
   )
 }

@@ -3,7 +3,8 @@ import type { Book } from '../../../../shared/types'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { useReader } from '@/stores/reader'
 import { useUi } from '@/stores/ui'
-import { clamp, cn } from '@/lib/utils'
+import { useMobilePrefs } from '@/stores/mobilePrefs'
+import { clamp, cn, isMobilePlatform } from '@/lib/utils'
 import { buildToc, generateCover, type PdfHandle, type TocItem } from '@/lib/pdfEngine'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -38,7 +39,7 @@ interface ViewerApp {
   zoomOut(): void
 }
 
-/** سمة داكنة لواجهة العارض لتلائم هوية التطبيق (الصفحات تبقى بيضاء) */
+/** سمة داكنة لواجهة العارض لتلائم هوية التطبيق (الصفحات تبقى بيضاء) — سطح المكتب */
 const VIEWER_DARK_CSS = `:root{
   --main-color:#e6e9ef !important;
   --body-bg-color:#0f1115 !important;
@@ -56,6 +57,29 @@ const VIEWER_DARK_CSS = `:root{
 #toolbarContainer{padding-top:env(safe-area-inset-top,0px)}
 body{background:#0f1115}`
 
+/**
+ * وضع Moon+ على الجوال (v2.7): الصفحة تلمس حواف الشاشة تمامًا —
+ * لا شريط أدوات ولا هوامش ولا ظلال ولا أرضية سوداء، وأرضية العرض
+ * بيضاء بلون الورقة نفسه فتبدو الصفحة أكبر والنص أوضح.
+ * القوائم المنسدلة (بحث/خصائص) تبقى داكنة بهوية التطبيق.
+ */
+const VIEWER_MOBILE_CSS = `:root{
+  --main-color:#e6e9ef !important;
+  --doorhanger-bg-color:#1a1d24 !important;
+  --doorhanger-border-color:#2c313c !important;
+  --field-bg-color:#1a1d24 !important;
+  --field-color:#e6e9ef !important;
+  --field-border-color:#2c313c !important;
+  --body-bg-color:#ffffff !important;
+  --page-margin:0 auto !important;
+  --page-border:none !important;
+}
+html,body{background:#ffffff !important}
+#toolbarContainer,#secondaryToolbar{display:none !important}
+#viewerContainer{inset:0 !important;background:#ffffff !important;overscroll-behavior:contain}
+.pdfViewer .page{box-shadow:none !important;background:#fff !important}
+#findbar{top:auto !important}`
+
 export function PdfViewer({ book, onDocReady, onPageChange }: Props) {
   const reader = useReader()
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -68,6 +92,22 @@ export function PdfViewer({ book, onDocReady, onPageChange }: Props) {
   bookRef.current = book
   const [failed, setFailed] = useState(false)
   const [loading, setLoading] = useState(true)
+  const mobile = isMobilePlatform()
+  const mp = useMobilePrefs((s) => s.prefs)
+  const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // الجوال (v2.7): ملاءمة الصفحة من لوحة التحكم تُطبق فورًا
+  // الافتراضي «عرض الشاشة» يجعل الصفحة تلمس حواف التليفون تمامًا
+  useEffect(() => {
+    if (!mobile) return
+    const app = appRef.current
+    if (!app?.pdfViewer) return
+    try {
+      app.pdfViewer.currentScaleValue = mp.pdfFit === 'page' ? 'page-fit' : 'page-width'
+    } catch {
+      /* ignore */
+    }
+  }, [mobile, mp.pdfFit, loading])
 
   // ---------- حفظ التقدم عند تغير الصفحة ----------
   const savePage = useCallback(
@@ -109,6 +149,61 @@ export function PdfViewer({ book, onDocReady, onPageChange }: Props) {
     })
   }, [])
 
+  // ---------- مناطق لمس الجوال داخل عارض موزيلا (v2.7) ----------
+  // الأطراف تمرّر شاشة كاملة (سلوك التمرير المتصل في Moon+)، والوسط يبدّل الوضع الغامر/اللوحة
+  const wireTapZones = useCallback((frameDoc: Document, frameEl: HTMLIFrameElement): void => {
+    const onTap = (e: MouseEvent): void => {
+      try {
+        const target = e.target as HTMLElement | null
+        // روابط الملاحظات/الفهرس الداخلية تعمل طبيعيًا
+        if (target?.closest?.('a')) return
+        const doc = frameDoc
+        const sel = doc.getSelection?.()
+        if (sel && !sel.isCollapsed) return
+        const width = doc.defaultView?.innerWidth ?? 0
+        if (width <= 0) return
+        const rx = e.clientX / width
+        const log = (acted: string): void => {
+          try {
+            const w = window as unknown as { __mkPdfTapLog?: { rx: number; acted: string }[] }
+            w.__mkPdfTapLog = w.__mkPdfTapLog || []
+            w.__mkPdfTapLog.push({ rx: Math.round(rx * 100) / 100, acted })
+            window.dispatchEvent(new CustomEvent('mk-tapzone', { detail: { acted, rx } }))
+          } catch {
+            /* ignore */
+          }
+        }
+        const cont = doc.getElementById('viewerContainer')
+        if (rx >= 0.76) {
+          if (cont) {
+            log('next')
+            cont.scrollBy({ top: cont.clientHeight * 0.88, behavior: 'smooth' })
+          }
+        } else if (rx <= 0.24) {
+          if (cont) {
+            log('prev')
+            cont.scrollBy({ top: -cont.clientHeight * 0.88, behavior: 'smooth' })
+          }
+        } else {
+          const centerAction = useMobilePrefs.getState().prefs.centerAction
+          if (centerAction === 'settings') {
+            log('settings')
+            const st = useReader.getState()
+            st.setSettingsOpen(!st.settingsOpen)
+          } else {
+            log('zen')
+            const st = useReader.getState()
+            st.setZen(!st.zenMode)
+          }
+        }
+        void frameEl
+      } catch {
+        /* ignore */
+      }
+    }
+    frameDoc.addEventListener('click', onTap, true)
+  }, [])
+
   // ---------- تشغيل العارض ----------
   useEffect(() => {
     let cancelled = false
@@ -141,18 +236,20 @@ export function PdfViewer({ book, onDocReady, onPageChange }: Props) {
         frameDocRef.current = frame.contentDocument
         ;(frameWin as unknown as { __pdfViewerApp?: ViewerApp }).__pdfViewerApp = app
 
-        // سمة داكنة للواجهة + مساحات آمنة الجوال
+        // سمة الواجهة حسب المنصة + مساحات آمن الجوال
+        // سطح المكتب: سمة داكنة كما هي — الجوال: وضع Moon+ حتى الحواف
         try {
           if (frame.contentDocument?.head) {
             const style = frame.contentDocument.createElement('style')
             style.setAttribute('data-mk-viewer', '1')
-            style.textContent = VIEWER_DARK_CSS
+            style.textContent = isMobilePlatform() ? VIEWER_MOBILE_CSS : VIEWER_DARK_CSS
             frame.contentDocument.head.appendChild(style)
           }
         } catch {
           /* ignore */
         }
         wireSelectionBridge(frame.contentDocument!, frame)
+        if (isMobilePlatform()) wireTapZones(frame.contentDocument!, frame)
 
         // فتح المستند من البيانات (بلا قيود أصل file=) — open يتوقع {url|data}
         await app.open({ data: new Uint8Array(buf) })
@@ -170,6 +267,16 @@ export function PdfViewer({ book, onDocReady, onPageChange }: Props) {
           onPageChangeRef.current(e.pageNumber)
           savePage(e.pageNumber)
         })
+
+        // الجوال (v2.7): ملاءمة عرض الشاشة افتراضيًا — الصفحة من حافة لحافة
+        if (isMobilePlatform()) {
+          try {
+            const fit = useMobilePrefs.getState().prefs.pdfFit
+            app.pdfViewer.currentScaleValue = fit === 'page' ? 'page-fit' : 'page-width'
+          } catch {
+            /* ignore */
+          }
+        }
 
         // بيانات وصفية/غلاف إن كانت ناقصة — نفس سلوك النسخ السابقة
         const cur = bookRef.current
@@ -260,6 +367,25 @@ export function PdfViewer({ book, onDocReady, onPageChange }: Props) {
             } catch {
               return ''
             }
+          },
+          // الجوال (v2.7): تمرير تلقائي سلس داخل عارض موزيلا نفسه — على طريقة Moon+
+          setAutoScroll: (on, secs) => {
+            try {
+              if (autoScrollTimerRef.current) {
+                clearInterval(autoScrollTimerRef.current)
+                autoScrollTimerRef.current = null
+              }
+              if (!on) return
+              const cont = frameDocRef.current?.getElementById('viewerContainer')
+              if (!cont) return
+              const pxPerTick = Math.max(1, (cont.clientHeight * 0.88 * 60) / (Math.max(1, secs) * 1000))
+              autoScrollTimerRef.current = setInterval(() => {
+                if (cont.scrollTop + cont.clientHeight >= cont.scrollHeight - 2) return
+                cont.scrollBy(0, pxPerTick)
+              }, 60)
+            } catch {
+              /* ignore */
+            }
           }
         }
         if (cancelled) return
@@ -289,6 +415,10 @@ export function PdfViewer({ book, onDocReady, onPageChange }: Props) {
       cancelled = true
       appRef.current = null
       frameDocRef.current = null
+      if (autoScrollTimerRef.current) {
+        clearInterval(autoScrollTimerRef.current)
+        autoScrollTimerRef.current = null
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -296,7 +426,7 @@ export function PdfViewer({ book, onDocReady, onPageChange }: Props) {
   const night = reader.nightInvert
 
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden bg-[#0f1115]">
+    <div className={cn('relative min-h-0 flex-1 overflow-hidden', mobile ? 'bg-white' : 'bg-[#0f1115]')}>
       {failed ? (
         <div className="flex h-full flex-col items-center justify-center gap-2 text-ink dark:text-dink">
           <p className="text-lg font-semibold">تعذر فتح هذا الكتاب</p>
@@ -307,7 +437,7 @@ export function PdfViewer({ book, onDocReady, onPageChange }: Props) {
           ref={iframeRef}
           src="./pdfjs/web/viewer.html"
           title="PDF"
-          className={cn('h-full w-full border-0', night && 'pdf-night')}
+          className={cn('h-full w-full border-0', night && (mobile ? 'pdf-night-m' : 'pdf-night'))}
           allow="fullscreen"
         />
       )}

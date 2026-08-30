@@ -386,6 +386,9 @@ async function main() {
     await backToLibrary()
 
     // ---------- 10) PDF: زر التمييز الرسمي + الكليك يمين ----------
+    // (نيّة الفحص: شريط موزيلا سليم على سطح المكتب — نعود لوضع الكمبيوتر،
+    //  لأن وضع الجوال v2.7 يخفي الشريط عمدًا ويوفّر التمييز من لوحة التحديد)
+    await evaljs(`(() => { window.__mkForceMobile = false; return 1 })()`)
     const pdfId = await evaljs(`(async () => (await window.api.listBooks()).find((b) => b.format === 'pdf')?.id ?? null)()`)
     await openCardById(pdfId)
     let viewerReady = false

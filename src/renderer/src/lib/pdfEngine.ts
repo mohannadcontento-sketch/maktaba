@@ -199,4 +199,6 @@ export interface PdfHandle {
   percent(): number
   /** نص صفحة للقراءة الصوتية (النسخة 2) */
   pageText(page: number): Promise<string>
+  /** تمرير تلقائي سلس (جوال v2.7) — يُحقن داخل عارض موزيلا نفسه */
+  setAutoScroll?(on: boolean, secs: number): void
 }

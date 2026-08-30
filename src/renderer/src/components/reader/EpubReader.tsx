@@ -987,6 +987,8 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
         try {
           w.__mkTapLog = w.__mkTapLog || []
           w.__mkTapLog.push({ rx: Math.round(rx * 100) / 100, rtl, acted })
+          // فلاش بصري موحّد على الجوال (v2.7) — يلتقطه MoonTapFlash
+          window.dispatchEvent(new CustomEvent('mk-tapzone', { detail: { acted, rx } }))
         } catch { /* ignore */ }
       }
       if (rx >= 0.76) {

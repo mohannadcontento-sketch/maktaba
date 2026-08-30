@@ -141,6 +141,11 @@ input[type='range'] {
   filter: invert(0.92) hue-rotate(180deg) brightness(1.05) contrast(0.95);
 }
 
+/* الجوال (v2.7): قلب على مستوى الإطار كله — حتى أرضية العرض البيضاء تسودّ فلا حواف ساطعة ليلًا */
+.pdf-night-m {
+  filter: invert(0.92) hue-rotate(180deg) brightness(1.05) contrast(0.95);
+}
+
 /* ---------- حاوية EPUB ---------- */
 .epub-container {
   background: transparent !important;
