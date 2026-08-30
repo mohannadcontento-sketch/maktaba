@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO_DIR="/home/z/my-project/maktaba_repo"
 REPO="mohannadcontento-sketch/maktaba"
-VERSION="2.4.0"
+VERSION="2.5.0"
 TAG="v${VERSION}"
 
 : "${GITHUB_TOKEN:?ضع رمز الوصول: GITHUB_TOKEN=ghp_xxx bash scripts/github-publish.sh}"
@@ -42,8 +42,8 @@ if "$GH" release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
   echo "    الإصدار موجود — سيُحدَّث"
 else
   "$GH" release create "$TAG" -R "$REPO" \
-    --title "مكتبة v2.4.0 — قارئ الجوال الاحترافي: عارض موزيلا الرسمي + لمس كامل" \
-    --notes-file .github/RELEASE_NOTES_v2.4.0.md
+    --title "مكتبة v2.5.0 — إعدادات لكل كتاب + تحكم موبايل كامل + تعليم وكومنتات" \
+    --notes-file .github/RELEASE_NOTES_v2.5.0.md
 fi
 
 echo "==> 5/5 رفع الحزم (exe + apk)"

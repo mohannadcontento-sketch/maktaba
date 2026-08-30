@@ -77,6 +77,8 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
   const isContinuousRef = useRef(false)
   const rtlRef = useRef(isRtlLang(book.language))
   const flipCooldownRef = useRef(0)
+  // كبت نقرة قلب الصفحة بعد فتح محرر الملاحظة بالنقر على تعليم
+  const annTapSupRef = useRef(0)
 
   const onRelocateRef = useRef(onRelocate)
   useEffect(() => {
@@ -92,14 +94,15 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
     // حقن الخطوط المدمجة بعناوين مطلقة ليعمل داخل iframe الكتاب
     const f = (name: string): string => new URL(`fonts/${name}`, window.location.href).href
     const fontFaces = `
-      @font-face { font-family: 'Amiri'; src: url('${f('Amiri-Regular.ttf')}') format('truetype'); }
-      @font-face { font-family: 'Cairo'; src: url('${f('Cairo-Variable.ttf')}') format('truetype'); }
-      @font-face { font-family: 'Tajawal'; src: url('${f('Tajawal-Regular.ttf')}') format('truetype'); font-weight: 400; }
-      @font-face { font-family: 'Tajawal'; src: url('${f('Tajawal-Bold.ttf')}') format('truetype'); font-weight: 700; }
-      @font-face { font-family: 'Noto Naskh Arabic'; src: url('${f('NotoNaskhArabic-Variable.ttf')}') format('truetype'); }
-      @font-face { font-family: 'Alexandria'; src: url('${f('Alexandria.ttf')}') format('truetype'); }
-      @font-face { font-family: 'Bokra'; src: url('${f('Bokra.ttf')}') format('truetype'); }
-      @font-face { font-family: 'El Messiri'; src: url('${f('ElMessiri.ttf')}') format('truetype'); }
+      @font-face { font-family: 'Amiri'; src: url('${f('Amiri-Regular.ttf')}') format('truetype'); font-weight: 400; font-display: swap; }
+      @font-face { font-family: 'Amiri'; src: url('${f('Amiri-Bold.ttf')}') format('truetype'); font-weight: 700; font-display: swap; }
+      @font-face { font-family: 'Cairo'; src: url('${f('Cairo-Variable.ttf')}') format('truetype'); font-display: swap; }
+      @font-face { font-family: 'Tajawal'; src: url('${f('Tajawal-Regular.ttf')}') format('truetype'); font-weight: 400; font-display: swap; }
+      @font-face { font-family: 'Tajawal'; src: url('${f('Tajawal-Bold.ttf')}') format('truetype'); font-weight: 700; font-display: swap; }
+      @font-face { font-family: 'Noto Naskh Arabic'; src: url('${f('NotoNaskhArabic-Variable.ttf')}') format('truetype'); font-display: swap; }
+      @font-face { font-family: 'Alexandria'; src: url('${f('Alexandria.ttf')}') format('truetype'); font-display: swap; }
+      @font-face { font-family: 'Bokra'; src: url('${f('Bokra.ttf')}') format('truetype'); font-display: swap; }
+      @font-face { font-family: 'El Messiri'; src: url('${f('ElMessiri.ttf')}') format('truetype'); font-display: swap; }
     `
     const alignMap: Record<string, string> = {
       right: 'right',
@@ -113,7 +116,7 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
     // لأن padding بالنسب المئوية لا يعمل بشكل صحيح في تخطيط الأعمدة (paginated) الخاص بـ epub.js
     // المحاذاة تُفرض على كل العناصر الكتلية + الجذر — كثير من الكتب تستخدم div بدل p
     // وتحمل أنماطها الخاصة فكانت الإعدادات تبدو «لا تعمل»
-    return `\n      ${fontFaces}\n      body { font-family: ${family} !important; font-weight: ${weight} !important; }\n      p, li, div { line-height: ${s.lineHeight} !important; }\n      body, p, div, li, blockquote, figcaption, dd, dt, td, th, h1, h2, h3, h4, h5, h6 { text-align: ${align} !important; }\n      img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n    `
+    return `\n      ${fontFaces}\n      body { font-family: ${family} !important; font-weight: ${weight} !important; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }\n      p, li, div { line-height: ${s.lineHeight} !important; }\n      body, p, div, li, blockquote, figcaption, dd, dt, td, th, h1, h2, h3, h4, h5, h6 { text-align: ${align} !important; }\n      img { max-width: 100%; height: auto; display: block; margin: 0 auto; }\n    `
   }, [])
 
   const attachedIdsRef = useRef(new Set<string>())
@@ -192,6 +195,57 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
     reportScrollRef.current = reportScrollProgress
   }, [reportScrollProgress])
 
+  // ---------- طابور تنقل موثوق — يمنع «وقوف» قلب الصفحات ----------
+  // epub.js يتجاهل next/prev أحيانًا أثناء إعادة رسم الفصل ووعدُه لا يُحل أبدًا،
+  // فتتساقط النقرات ويبدو القارئ عالقًا. الحل: طابور يتراكم عليه الطلب مع
+  // تحرير إجباري بالمهلة، فكل نقرة تُطبق بالترتيب مهما كان التوقيت.
+  const navBusyRef = useRef(false)
+  const pendingNavRef = useRef(0) // موجب = للأمام، سالب = للخلف (تراكم حتى ±4)
+
+  const drainNav = useCallback(async (): Promise<void> => {
+    if (navBusyRef.current) return
+    navBusyRef.current = true
+    try {
+      while (pendingNavRef.current !== 0) {
+        const rel = renditionRef.current
+        if (!rel) break
+        const dir = pendingNavRef.current > 0 ? 1 : -1
+        pendingNavRef.current -= dir
+        await Promise.race([
+          dir > 0 ? rel.next() : rel.prev(),
+          new Promise<void>((r) => setTimeout(r, 5000))
+        ])
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      navBusyRef.current = false
+    }
+  }, [])
+
+  const queueFlip = useCallback(
+    (dir: 1 | -1): void => {
+      pendingNavRef.current = Math.max(-4, Math.min(4, pendingNavRef.current + dir))
+      void drainNav()
+    },
+    [drainNav]
+  )
+
+  // خطاف تشخيصي للاختبارات — حالة طابور التنقل
+  const navInfoRef = useRef<() => { busy: boolean; pending: number }>(() => ({ busy: false, pending: 0 }))
+  useEffect(() => {
+    navInfoRef.current = () => ({ busy: navBusyRef.current, pending: pendingNavRef.current })
+  })
+
+  // فتح محرر الملاحظة عند النقر على تعليم — يُستخدم من ردود فعل epub.js
+  const openNoteFor = useCallback((id: string): void => {
+    // كبت نقرة قلب الصفحة — النقر على التعليم لا يجب أن يقلب أيضًا
+    annTapSupRef.current = Date.now()
+    const st = useReader.getState()
+    const cur = st.annotations.find((x) => x.id === id)
+    if (cur) st.setNoteEditor(cur)
+  }, [])
+
   // ---------- التنقل (متوافق مع الوضعين) ----------
   const next = useCallback((): void => {
     if (flowRef.current === 'scrolled') {
@@ -205,8 +259,8 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
       }
       // نهاية القسم → القسم التالي
     }
-    void renditionRef.current?.next()
-  }, [scrollerEl])
+    queueFlip(1)
+  }, [scrollerEl, queueFlip])
 
   const prev = useCallback((): void => {
     if (flowRef.current === 'scrolled') {
@@ -219,8 +273,8 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
       }
       // بداية القسم → القسم السابق
     }
-    void renditionRef.current?.prev()
-  }, [scrollerEl])
+    queueFlip(-1)
+  }, [scrollerEl, queueFlip])
 
   const nextRef = useRef(next)
   const prevRef = useRef(prev)
@@ -353,10 +407,56 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
               }
             })
             doc.addEventListener('click', (e) => onTapZoneInFrame(e as MouseEvent, doc))
+
+            // سحب أفقي داخل الكتاب لقلب الصفحات — الجوال يلمس iframe دائمًا
+            // وليس الحاوية الأم، لذا كان التقليب بالسحب لا يعمل على التليفون
+            let sw: { x: number; y: number; id: number } | null = null
+            doc.addEventListener('touchstart', (e) => {
+              if (e.touches.length !== 1) {
+                sw = null
+                return
+              }
+              const t = e.touches[0]
+              sw = { x: t.clientX, y: t.clientY, id: t.identifier }
+            }, { passive: true })
+            doc.addEventListener(
+              'touchend',
+              (e) => {
+                const start = sw
+                sw = null
+                if (!start || flowRef.current !== 'paginated') return
+                const t = e.changedTouches[0]
+                const dx = t.clientX - start.x
+                const dy = t.clientY - start.y
+                // سحب أفقي واضح فقط — لا نعترض التمرير العمودي
+                if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.4) return
+                const ds = doc.getSelection?.()
+                if (ds && !ds.isCollapsed) return
+                const toNext = rtlRef.current ? dx > 0 : dx < 0
+                if (toNext) nextRef.current()
+                else prevRef.current()
+              },
+              { passive: true }
+            )
+
+            // كليك يمين: نمنع قائمة النظام دائمًا — مع تحديد نصّ تبقى لوحة
+            // أدواتنا (تعليم/كومنت/نسخ/قراءة) ظاهرة فوق التحديد
+            doc.addEventListener('contextmenu', (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+            })
           } catch {
             /* ignore */
           }
         })
+
+        // تحميل الخطوط المدمجة مسبقًا حتى لا يُرسم الكتاب بخط بديل ثم يقفز
+        try {
+          const fams = ['Amiri', 'Cairo', 'Tajawal', 'Noto Naskh Arabic', 'Alexandria', 'Bokra', 'El Messiri']
+          await Promise.all(fams.map((f) => document.fonts.load(`16px "${f}"`, 'أبجد هوز')))
+        } catch {
+          /* ignore */
+        }
 
         // استئناف آخر موضع
         const target = lastCfiRef.current ?? undefined
@@ -468,6 +568,9 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
           }) => {
             const start = location?.start
             if (!start?.cfi) return
+            // إخفاء لوحة التحديد عند القلب — لا نتركها عائمة فوق موضع قديم
+            const rst = useReader.getState()
+            if (rst.selection) rst.setSelection(null)
             lastCfiRef.current = start.cfi
             if (typeof start.index === 'number') {
               lastSpineIndexRef.current = start.index
@@ -520,7 +623,7 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
         // إعادة رسم التعليقات المحفوظة (وأيضًا بعد إعادة بناء القارئ عند تبديل وضع العرض)
         for (const a of useReader.getState().annotations) {
           if (!a.cfi || attachedIdsRef.current.has(a.id)) continue
-          attachEpubAnnotation(rel, a.type, a.cfi, a.color)
+          attachEpubAnnotation(rel, a.type, a.cfi, a.color, () => openNoteFor(a.id))
           attachedIdsRef.current.add(a.id)
         }
         // إعادة رسم نتائج البحث بعد إعادة البناء
@@ -701,7 +804,7 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
         text: sel.text,
         note: ''
       })
-      attachEpubAnnotation(rel, type, sel.cfiRange, color)
+      attachEpubAnnotation(rel, type, sel.cfiRange, color, () => openNoteFor(useReader.getState().annotations[0]?.id ?? ''))
       sel.removeEpubSelection?.()
       window.getSelection()?.removeAllRanges()
       reader.setSelection(null)
@@ -723,7 +826,7 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
     const prevIds = new Set(prevAnnsRef.current.map((a) => a.id))
     for (const a of reader.annotations) {
       if (!prevIds.has(a.id) && a.cfi && !attachedIdsRef.current.has(a.id)) {
-        attachEpubAnnotation(rel, a.type, a.cfi, a.color)
+        attachEpubAnnotation(rel, a.type, a.cfi, a.color, () => openNoteFor(a.id))
         attachedIdsRef.current.add(a.id)
       }
     }
@@ -781,15 +884,17 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
 
   const isScrolled = settings.flow === 'scrolled'
 
-  // خطاف تشخيصي للاختبارات — وضع العرض الحالي ونوع المدير
+  // خطاف تشخيصي للاختبارات — وضع العرض الحالي ونوع المدير + طابور التنقل
   useEffect(() => {
     ;(window as unknown as { __epubFlowInfo?: () => { flow: string; continuous: boolean; ready: boolean } }).__epubFlowInfo = () => ({
       flow: flowRef.current,
       continuous: isContinuousRef.current,
       ready
     })
+    ;(window as unknown as { __mkNavInfo?: () => { busy: boolean; pending: number } }).__mkNavInfo = navInfoRef.current
     return () => {
       delete (window as unknown as { __epubFlowInfo?: unknown }).__epubFlowInfo
+      delete (window as unknown as { __mkNavInfo?: unknown }).__mkNavInfo
     }
   }, [ready])
 
@@ -798,6 +903,16 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
   // ---------- مناطق لمس الجوال (تعمل داخل iframe الكتاب): الأطراف تقلب، الوسط يبدل الوضع الغامر ----------
   const onTapZoneInFrame = useCallback((e: MouseEvent, doc: Document): void => {
     try {
+      // نقرة إنهاء لوحة التحديد: إذا كانت اللوحة ظاهرة والنقر بعدها → نظّف وأغلق فقط
+      const rs = useReader.getState()
+      const dsel = doc.getSelection?.()
+      if (rs.selection && (!dsel || dsel.isCollapsed)) {
+        rs.selection.removeEpubSelection?.()
+        rs.setSelection(null)
+        return
+      }
+      // النقر على تعليمٍ يفتح الملاحظة — لا نقلب الصفحة في نفس النقرة
+      if (Date.now() - annTapSupRef.current < 450) return
       const w = window as unknown as { __mkForceTapZones?: boolean; __mkTapLog?: unknown[] }
       if (!isMobilePlatform() && !w.__mkForceTapZones) return
       const sel = doc.getSelection?.()
@@ -899,11 +1014,12 @@ export function attachEpubAnnotation(
   rendition: Rendition,
   type: 'highlight' | 'underline' | 'note',
   cfiRange: string,
-  color: string
+  color: string,
+  onClick?: () => void
 ): void {
   try {
     const kind = type === 'underline' ? 'underline' : 'highlight'
-    rendition.annotations.add(kind, cfiRange, {}, () => {}, `ann-${Math.random().toString(36).slice(2)}`, {
+    rendition.annotations.add(kind, cfiRange, {}, () => onClick?.(), `ann-${Math.random().toString(36).slice(2)}`, {
       fill: color,
       'fill-opacity': type === 'highlight' ? '0.35' : '0',
       'stroke': color,

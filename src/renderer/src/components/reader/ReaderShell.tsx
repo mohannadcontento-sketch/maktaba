@@ -11,7 +11,7 @@ import {
   Sun,
   Maximize2,
   Minimize2,
-  RotateCcw,
+  BookMarked,
   Printer,
   Type,
   Volume2,
@@ -33,7 +33,7 @@ import { TtsBar } from './TtsBar'
 import { WindowControls } from '@/components/layout/Chrome'
 import { IconButton } from '@/components/ui/IconButton'
 import { Button, Slider, Select } from '@/components/ui/kit'
-import { cn, isRtlLang } from '@/lib/utils'
+import { cn, isMobilePlatform, isRtlLang } from '@/lib/utils'
 
 type ReaderToc = TocItem[] | TocEntry[]
 
@@ -79,37 +79,71 @@ export function ReaderShell({ book }: { book: Book }) {
   // اتجاه التنقل حسب لغة الكتاب (عربي/عبري/فارسي... = يمين إلى يسار)
   const epubRtl = isRtlLang(book.language)
 
-  // إعدادات القراءة محفوظة لكل التطبيق
+  // إعدادات القراءة: افتراضية عامة لكل التطبيق + طبقة خاصة بكل كتاب
+  // (طلب المستخدم: «خلي كل كتاب مستقل في الإعدادات»)
+  const bookSettingsKey = `reader.settings.book:${book.id}`
   const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_READER_SETTINGS)
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
+  const [hasBookOverride, setHasBookOverride] = useState(false)
+  const globalSettingsRef = useRef<ReaderSettings>(DEFAULT_READER_SETTINGS)
 
-  // تحميل الإعدادات المحفوظة مرة واحدة
+  // تحميل الافتراضي العام ثم فوقه إعدادات هذا الكتاب
   useEffect(() => {
+    setSettingsLoaded(false)
     void (async () => {
-      const raw = await window.api.getSetting('reader.settings')
-      if (raw) {
-        try {
-          setSettings((s) => ({ ...s, ...(JSON.parse(raw) as Partial<ReaderSettings>) }))
-        } catch {
-          /* ignore */
-        }
+      let g: ReaderSettings = DEFAULT_READER_SETTINGS
+      try {
+        const raw = await window.api.getSetting('reader.settings')
+        if (raw) g = { ...g, ...(JSON.parse(raw) as Partial<ReaderSettings>) }
+      } catch {
+        /* ignore */
       }
+      globalSettingsRef.current = g
+      let merged = g
+      let hasOverride = false
+      try {
+        const rawB = await window.api.getSetting(bookSettingsKey)
+        if (rawB) {
+          merged = { ...g, ...(JSON.parse(rawB) as Partial<ReaderSettings>) }
+          hasOverride = true
+        }
+      } catch {
+        /* ignore */
+      }
+      setHasBookOverride(hasOverride)
+      setSettings(merged)
+      setSettingsLoaded(true)
     })()
-  }, [])
+    // يعاد التحميل عند تبديل الكتاب
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book.id])
 
-  const persistSettings = useCallback((s: ReaderSettings): void => {
-    void window.api.setSetting('reader.settings', JSON.stringify(s))
-  }, [])
-
+  // أي تعديل داخل القارئ يُحفظ لهذا الكتاب تحديدًا (لا يمس بقية الكتب)
   const updateSettings = useCallback(
     (patch: Partial<ReaderSettings>): void => {
       setSettings((prev) => {
         const next = { ...prev, ...patch }
-        persistSettings(next)
+        void window.api.setSetting(bookSettingsKey, JSON.stringify(next))
+        setHasBookOverride(true)
         return next
       })
     },
-    [persistSettings]
+    [bookSettingsKey]
   )
+
+  // «طبّق على كل الكتب»: نسخ إعدادات الكتاب الحالي كافتراضي عام
+  const applyToAllBooks = useCallback((): void => {
+    void window.api.setSetting('reader.settings', JSON.stringify(settings))
+    globalSettingsRef.current = settings
+    ui.toast('صارت هذه الإعدادات الافتراضية لكل الكتب الجديدة', 'success')
+  }, [settings, ui])
+
+  // «استعادة الافتراضي»: حذف طبقة هذا الكتاب والعودة للعام
+  const resetBookSettings = useCallback((): void => {
+    void window.api.setSetting(bookSettingsKey, '')
+    setHasBookOverride(false)
+    setSettings(globalSettingsRef.current)
+  }, [bookSettingsKey])
 
   // ---------- جاهزية المحرك ----------
   const epubHandleRef = useRef<EpubHandle | null>(null)
@@ -302,7 +336,10 @@ export function ReaderShell({ book }: { book: Book }) {
   const zen = reader.zenMode
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex h-full flex-col"
+      onContextMenu={(e) => e.preventDefault()}
+    >
       {/* الشريط العلوي — مع مساحة أمان الشاشات النافذة على الجوال */}
       {!zen && (
         <header className="drag-region relative z-30 flex h-[calc(52px+env(safe-area-inset-top,0px))] shrink-0 select-none items-center gap-1 border-b border-line bg-surface px-3 pt-[env(safe-area-inset-top,0px)] dark:border-dline dark:bg-dsurface">
@@ -388,7 +425,7 @@ export function ReaderShell({ book }: { book: Book }) {
             {reader.nightInvert || settings.theme === 'night' ? <Sun size={17} /> : <Moon size={17} />}
           </IconButton>
 
-          {!isPdf && (
+          {!isPdf && settingsLoaded && (
             <IconButton title={t('reader.displayOptions')} active={reader.settingsOpen} onClick={() => reader.setSettingsOpen(!reader.settingsOpen)}>
               <Type size={17} />
             </IconButton>
@@ -428,7 +465,7 @@ export function ReaderShell({ book }: { book: Book }) {
         <main className="relative flex min-w-0 flex-1">
           {isPdf ? (
             <PdfViewer book={book} onDocReady={onPdfReady} onPageChange={onEpdfPageChange} />
-          ) : (
+          ) : settingsLoaded ? (
             <EpubReader
               book={book}
               settings={settings}
@@ -436,6 +473,10 @@ export function ReaderShell({ book }: { book: Book }) {
               onDocReady={onEpubReady}
               onRelocate={onEpubRelocate}
             />
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-accent/25 border-t-accent" />
+            </div>
           )}
 
           {!isPdf && reader.searchOpen && <SearchBar isPdf={false} />}
@@ -456,10 +497,13 @@ export function ReaderShell({ book }: { book: Book }) {
           )}
 
           {/* لوحة خيارات عرض EPUB */}
-          {!isPdf && reader.settingsOpen && (
+          {!isPdf && reader.settingsOpen && settingsLoaded && (
             <DisplayOptionsDrawer
               settings={settings}
               onChange={updateSettings}
+              perBook={hasBookOverride}
+              onApplyToAll={applyToAllBooks}
+              onResetBook={resetBookSettings}
               onClose={() => reader.setSettingsOpen(false)}
             />
           )}
@@ -488,6 +532,38 @@ export function ReaderShell({ book }: { book: Book }) {
         <SelectionPopover isPdf={isPdf} />
         <NoteEditor />
       </div>
+
+      {/* شريط تحكم سفلي للجوال في EPUB — تقليب مباشر وشريط موضع دائم الظهور
+          (طلب المستخدم: «في التليفون مفيش تحكم وتقليب صفحات») */}
+      {!isPdf && !zen && settingsLoaded && isMobilePlatform() && (
+        <footer className="flex h-[54px] shrink-0 items-center gap-1.5 border-t border-line bg-surface px-2 pb-[env(safe-area-inset-bottom,0px)] dark:border-dline dark:bg-dsurface">
+          <IconButton title="السابق" onClick={() => engine.epub?.prev()}>
+            {epubRtl ? <ChevronRight size={21} /> : <ChevronLeft size={21} />}
+          </IconButton>
+          <input
+            type="range"
+            dir="ltr"
+            min={0}
+            max={100}
+            step={0.5}
+            value={percent}
+            onChange={(e) => setPercent(Number(e.target.value))}
+            onMouseUp={(e) => {
+              const v = Number((e.target as HTMLInputElement).value)
+              engine.epub?.displayAtPercent(v)
+            }}
+            onTouchEnd={(e) => {
+              const v = Number((e.target as HTMLInputElement).value)
+              engine.epub?.displayAtPercent(v)
+            }}
+            className="h-1.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-gray-300 dark:bg-dline [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent dark:[&::-webkit-slider-thumb]:bg-daccent"
+          />
+          <span className="w-9 shrink-0 text-center text-[11px] tabular-nums font-semibold">{Math.round(percent)}%</span>
+          <IconButton title="التالي" onClick={() => engine.epub?.next()}>
+            {epubRtl ? <ChevronLeft size={21} /> : <ChevronRight size={21} />}
+          </IconButton>
+        </footer>
+      )}
     </div>
   )
 }
@@ -511,10 +587,16 @@ function ZenExitBar({ onExit }: { onExit(): void }) {
 function DisplayOptionsDrawer({
   settings,
   onChange,
+  perBook,
+  onApplyToAll,
+  onResetBook,
   onClose
 }: {
   settings: ReaderSettings
   onChange(p: Partial<ReaderSettings>): void
+  perBook: boolean
+  onApplyToAll(): void
+  onResetBook(): void
   onClose(): void
 }) {
   const { t } = useTranslation()
@@ -524,18 +606,29 @@ function DisplayOptionsDrawer({
       <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-line dark:bg-dline md:hidden" />
       <div className="mb-3 flex items-center justify-between">
         <p className="text-sm font-bold">{t('reader.displayOptions')}</p>
-        <div className="flex items-center gap-2">
-          {/* زر إعادة الضبط للإعدادات الافتراضية */}
+        <button onClick={onClose} className="text-muted hover:text-ink">
+          ✕
+        </button>
+      </div>
+
+      {/* إعدادات مستقلة لكل كتاب: شارة + أزرار النطاق */}
+      <div className="mb-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-2.5">
+        <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-amber-700 dark:text-amber-400">
+          <BookMarked size={13} />
+          {perBook ? 'هذه الإعدادات خاصة بهذا الكتاب' : 'التعديلات تُحفظ لهذا الكتاب فقط'}
+        </p>
+        <div className="flex gap-1.5">
           <button
-            onClick={() => onChange({ ...DEFAULT_READER_SETTINGS })}
-            className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-muted transition-colors hover:bg-black/5 hover:text-ink dark:hover:bg-white/10"
-            title={t('reader.resetDefaults')}
+            onClick={onApplyToAll}
+            className="flex-1 rounded-lg bg-accent/10 px-2 py-1.5 text-[11px] font-medium text-accent-strong transition-colors hover:bg-accent/20 dark:bg-daccent/15 dark:text-daccent"
           >
-            <RotateCcw size={12} />
-            {t('reader.resetDefaults')}
+            طبّق على كل الكتب
           </button>
-          <button onClick={onClose} className="text-muted hover:text-ink">
-            ✕
+          <button
+            onClick={onResetBook}
+            className="flex-1 rounded-lg px-2 py-1.5 text-[11px] font-medium text-muted transition-colors hover:bg-black/5 hover:text-ink dark:hover:bg-white/10"
+          >
+            استعادة الافتراضي
           </button>
         </div>
       </div>

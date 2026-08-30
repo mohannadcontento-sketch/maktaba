@@ -101,6 +101,12 @@ export function PdfViewer({ book, onDocReady, onPageChange }: Props) {
     }
     frameDoc.addEventListener('pointerup', report)
     frameDoc.addEventListener('keyup', report)
+    // كليك يمين في PDF: منع قائمة النظام — ومع تحديد نصّ تُظهر لوحة أدواتنا
+    // (التمييز الرسمي نفسه متاح من شريط عارض موزيلا: قلم التمييز)
+    frameDoc.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      report()
+    })
   }, [])
 
   // ---------- تشغيل العارض ----------

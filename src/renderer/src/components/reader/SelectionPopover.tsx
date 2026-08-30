@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next'
 /**
  * لوحة عائمة فوق نص محدد تعرض أدوات التمييز/التسطير/الملاحظة/النسخ
  * تعمل مع القارئين معًا عبر window.__pdfCreateAnnotation أو __epubCreateAnnotation
+ * وهي أيضًا «قائمة الكليك يمين» المطلوبة: تمييز + كومنت + نسخ + قراءة + بحث
  */
 export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
   const sel = useReader((s) => s.selection)
@@ -21,11 +22,38 @@ export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
       setShowColors(false)
       return
     }
-    // إحداثيات الشاشة: PDF يعطي إحداثيات داخل الحاوية، لذا نحسبها من rect الممرر
-    const width = 260
-    const left = Math.max(12, Math.min(window.innerWidth - width - 12, sel.rect.x))
-    const top = Math.max(60, sel.rect.y - 52)
+    // موضع ذكي: فوق التحديد إن اتسع الشاشة، وإلا تحته — مع تثبيت داخل الحدود
+    // (على الجوال خصوصًا قد يكون التحديد قرب الحافة العليا فيختفي outside)
+    const width = 272
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, sel.rect.x))
+    const minTop = 66
+    const below = Math.min(window.innerHeight - 96, sel.rect.y + sel.rect.h + 10)
+    const top = sel.rect.y >= minTop + 52 ? sel.rect.y - 52 : Math.max(minTop, below)
     setPos({ top, left })
+  }, [sel])
+
+  // إغلاق اللوحة عند الضغط/اللمس خارجها — وتنظيف التحديد من الكتاب أيضًا
+  // (ملاحظة: نقرات داخل iframe الكتاب لا تصل هنا — EpubReader يعالجها بنفسه)
+  useEffect(() => {
+    if (!sel) return
+    const onDown = (e: MouseEvent | TouchEvent): void => {
+      const target = e.target as HTMLElement | null
+      if (target?.closest?.('[data-selpop]')) return
+      const st = useReader.getState()
+      st.selection?.removeEpubSelection?.()
+      window.getSelection?.()?.removeAllRanges()
+      st.setSelection(null)
+    }
+    // مهلة قصيرة حتى لا تُغلقها نفس الضغطة التي أنتجت التحديد
+    const tm = setTimeout(() => {
+      window.addEventListener('mousedown', onDown, true)
+      window.addEventListener('touchstart', onDown, true)
+    }, 450)
+    return () => {
+      clearTimeout(tm)
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('touchstart', onDown, true)
+    }
   }, [sel])
 
   if (!sel) return null
@@ -51,9 +79,13 @@ export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
     setSelection(null)
   }
 
+  // أزرار أكبر لمسًا على الجوال — القائمة نفسها تعمل باللمس الطويل والكليك يمين
+  const btn = 'rounded-lg hover:bg-black/[0.06] dark:hover:bg-white/10 max-md:h-10 max-md:w-11 max-md:justify-center md:px-2 md:py-1.5'
+
   return (
     <div
-      className="fixed z-[70] anim-in flex items-center gap-0.5 rounded-xl border border-black/10 bg-white/97 p-1 shadow-xl backdrop-blur dark:border-white/15 dark:bg-dsurface2/97"
+      data-selpop="1"
+      className="anim-in fixed z-[70] flex items-center gap-0.5 rounded-xl border border-black/10 bg-white/97 p-1 shadow-xl backdrop-blur max-md:rounded-2xl max-md:p-1.5 dark:border-white/15 dark:bg-dsurface2/97"
       style={{ top: pos.top, left: pos.left }}
       onMouseDown={(e) => e.preventDefault()}
     >
@@ -62,18 +94,18 @@ export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
         <>
           <div className="relative">
             <button
-              className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-black/[0.06] dark:hover:bg-white/10"
+              className={`flex items-center gap-1 text-xs font-medium ${btn}`}
               onClick={() => setShowColors((s) => !s)}
               title="تمييز"
             >
-              <Highlighter size={15} />
+              <Highlighter size={16} />
             </button>
             {showColors && (
-              <div className="absolute start-0 top-full mt-1 flex gap-1 rounded-xl border border-black/10 bg-white p-1.5 shadow-lg dark:border-white/15 dark:bg-dsurface2">
+              <div className="absolute start-0 top-full mt-1 flex gap-1 rounded-xl border border-black/10 bg-white p-1.5 shadow-lg max-md:gap-1.5 max-md:p-2 dark:border-white/15 dark:bg-dsurface2">
                 {HIGHLIGHT_COLORS.map((c) => (
                   <button
                     key={c}
-                    className="h-6 w-6 rounded-full ring-offset-1 transition-transform hover:scale-110"
+                    className="h-6 w-6 rounded-full ring-offset-1 transition-transform hover:scale-110 max-md:h-8 max-md:w-8"
                     style={{ backgroundColor: c }}
                     onClick={() => {
                       create('highlight', c)
@@ -85,48 +117,48 @@ export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
             )}
           </div>
           <button
-            className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
+            className={btn}
             title="تسطير"
             onClick={() => create('underline', '#3b82f6')}
           >
-            <Underline size={15} />
+            <Underline size={16} />
           </button>
           <button
-            className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
-            title="ملاحظة"
+            className={btn}
+            title="ملاحظة / كومنت"
             onClick={() => create('note', '#f59e0b')}
           >
-            <StickyNote size={15} />
+            <StickyNote size={16} />
           </button>
         </>
       )}
       <span className="mx-0.5 h-5 w-px bg-black/10 dark:bg-white/15" />
       <button
-        className="rounded-lg px-2 py-1.5 text-accent hover:bg-black/[0.06] dark:hover:bg-white/10"
+        className={`text-accent ${btn}`}
         title={t('reader.readSelection')}
         onClick={speakSelection}
       >
-        <Volume2 size={15} />
+        <Volume2 size={16} />
       </button>
       <button
-        className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
+        className={btn}
         title="نسخ"
         onClick={() => {
           void navigator.clipboard.writeText(sel.text).then(() => ui.toast('تم النسخ', 'success'))
           setSelection(null)
         }}
       >
-        <Copy size={15} />
+        <Copy size={16} />
       </button>
       <button
-        className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
+        className={btn}
         title="بحث في الويب"
         onClick={() => {
           window.open(`https://www.google.com/search?q=${encodeURIComponent(sel.text.slice(0, 120))}`, '_blank')
           setSelection(null)
         }}
       >
-        <Globe size={15} />
+        <Globe size={16} />
       </button>
     </div>
   )

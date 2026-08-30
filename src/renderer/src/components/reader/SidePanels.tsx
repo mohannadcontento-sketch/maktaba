@@ -199,8 +199,19 @@ function AnnotationsList({ onJump }: { onJump(location: string | number): void }
               {a.type === 'highlight' ? 'تمييز' : a.type === 'underline' ? 'تسطير' : 'ملاحظة'}
               {a.page != null && ` · ص ${a.page}`}
             </span>
+            {/* زر الملاحظة/الكومنت — يفتح محرر الملاحظة مباشرة */}
             <button
-              className="ms-auto hidden rounded p-1 text-red-500 opacity-70 hover:bg-red-50 group-hover:block dark:hover:bg-red-950"
+              className="ms-auto hidden rounded p-1 text-muted opacity-70 hover:bg-black/5 hover:text-ink group-hover:block dark:hover:bg-white/10"
+              onClick={(e) => {
+                e.stopPropagation()
+                reader.setNoteEditor(a)
+              }}
+              title={a.note ? 'تحرير الملاحظة' : 'إضافة ملاحظة'}
+            >
+              <StickyNote size={12} />
+            </button>
+            <button
+              className="hidden rounded p-1 text-red-500 opacity-70 hover:bg-red-50 group-hover:block dark:hover:bg-red-950"
               onClick={(e) => {
                 e.stopPropagation()
                 void reader.deleteAnnotation(a.id)
