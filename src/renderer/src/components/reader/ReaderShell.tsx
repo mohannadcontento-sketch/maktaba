@@ -66,6 +66,21 @@ export function ReaderShell({ book }: { book: Book }) {
   const [remainingMin, setRemainingMin] = useState<number | null>(null)
   // القراءة الصوتية (النسخة 2)
   const [ttsOpen, setTtsOpen] = useState(false)
+  // قراءة النص المحدد فقط (النسخة 2.2)
+  const [ttsSelection, setTtsSelection] = useState<string | null>(null)
+
+  // جسر: زر «قراءة المحدد» في لوحة التحديد → شريط القراءة الصوتية في وضع المحدد
+  useEffect(() => {
+    ;(window as unknown as { __maktabaSpeakSelection?: (text: string) => void }).__maktabaSpeakSelection = (
+      text: string
+    ) => {
+      setTtsSelection(text)
+      setTtsOpen(true)
+    }
+    return () => {
+      delete (window as unknown as { __maktabaSpeakSelection?: unknown }).__maktabaSpeakSelection
+    }
+  }, [])
 
   // اتجاه التنقل حسب لغة الكتاب (عربي/عبري/فارسي... = يمين إلى يسار)
   const epubRtl = isRtlLang(book.language)
@@ -457,9 +472,19 @@ export function ReaderShell({ book }: { book: Book }) {
 
           <SearchBar isPdf={isPdf} />
 
-          {/* شريط القراءة الصوتية (النسخة 2) */}
+          {/* شريط القراءة الصوتية (النسخة 2) — مع وضع قراءة المحدد (2.2) */}
           {ttsOpen && (
-            <TtsBar isPdf={isPdf} engine={engine} autoStart onClose={() => setTtsOpen(false)} />
+            <TtsBar
+              isPdf={isPdf}
+              engine={engine}
+              autoStart
+              selectionText={ttsSelection}
+              onSelectionDone={() => setTtsSelection(null)}
+              onClose={() => {
+                setTtsSelection(null)
+                setTtsOpen(false)
+              }}
+            />
           )}
 
           {/* لوحة خيارات عرض EPUB */}

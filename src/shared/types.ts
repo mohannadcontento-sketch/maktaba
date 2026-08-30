@@ -115,6 +115,16 @@ export interface BackupResult {
   filesRestored: number
 }
 
+/** صورة غلاف مرشحة من بحث الويب (النسخة 2.2) */
+export interface WebImage {
+  thumb: string
+  full: string
+  w: number
+  h: number
+  source: 'google-images' | 'duckduckgo' | 'google-books' | 'openlibrary'
+  title?: string
+}
+
 // جسر API المكشوف للواجهة عبر preload
 export interface ApiBridge {
   // استيراد
@@ -131,6 +141,13 @@ export interface ApiBridge {
   deleteBook(id: string, deleteFile: boolean): Promise<void>
   saveCover(bookId: string, dataUrl: string): Promise<string>
   fetchWebCover(bookId: string, title: string, author?: string | null): Promise<Book | null>
+  /** منتقي الأغلفة 2.2: بحث شبكي يدوي */
+  searchWebImages(title: string, author?: string | null): Promise<WebImage[]>
+  useWebImage(bookId: string, url: string): Promise<Book | null>
+  /** فتح نافذة متصفح مدمج على صور جوجل للاختيار اليدوي (سطح المكتب فقط) */
+  openCoverBrowser(bookId: string, query: string): Promise<void>
+  /** إشعار بتحديث غلاف من نافذة المنتقي */
+  onCoversUpdated(cb: (book: Book | null) => void): () => void
   fileUrl(id: string): Promise<string>
   revealBookFile(id: string): Promise<void>
 

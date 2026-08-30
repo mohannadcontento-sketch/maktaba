@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { ApiBridge, BookUpdate } from '../shared/types'
+import type { ApiBridge, Book, BookUpdate } from '../shared/types'
 
 const api: ApiBridge = {
   // استيراد
@@ -27,6 +27,15 @@ const api: ApiBridge = {
   deleteBook: (id, deleteFile) => ipcRenderer.invoke('books:delete', id, deleteFile),
   saveCover: (bookId, dataUrl) => ipcRenderer.invoke('covers:save', bookId, dataUrl),
   fetchWebCover: (bookId, title, author) => ipcRenderer.invoke('covers:fetchWeb', bookId, title, author),
+  // منتقي الأغلفة 2.2
+  searchWebImages: (title, author) => ipcRenderer.invoke('covers:searchWeb', title, author),
+  useWebImage: (bookId, url) => ipcRenderer.invoke('covers:useUrl', bookId, url),
+  openCoverBrowser: (bookId, query) => ipcRenderer.invoke('covers:openBrowser', bookId, query),
+  onCoversUpdated: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, book: Book | null): void => cb(book)
+    ipcRenderer.on('covers:updated', listener)
+    return () => ipcRenderer.removeListener('covers:updated', listener)
+  },
   fileUrl: (id) => ipcRenderer.invoke('files:url', id),
   revealBookFile: (id) => ipcRenderer.invoke('files:reveal', id),
 

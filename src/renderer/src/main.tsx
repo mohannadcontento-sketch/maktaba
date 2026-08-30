@@ -8,8 +8,22 @@ import { applyDirection, initI18n } from './i18n'
 initI18n('ar')
 applyDirection('ar')
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-)
+async function boot(): Promise<void> {
+  // على أجهزة الجوال (Capacitor/Android) نركّب جسر window.api البديل قبل رندر التطبيق
+  const cap = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor
+  if (cap?.isNativePlatform?.()) {
+    try {
+      const { installShim } = await import('./platform/shim')
+      await installShim()
+    } catch (e) {
+      console.error('mobile shim failed', e)
+    }
+  }
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  )
+}
+
+void boot()

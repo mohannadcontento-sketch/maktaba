@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO_DIR="/home/z/my-project/maktaba_repo"
 REPO="mohannadcontento-sketch/maktaba"
-VERSION="2.1.0"
+VERSION="2.2.0"
 TAG="v${VERSION}"
 
 : "${GITHUB_TOKEN:?ضع رمز الوصول: GITHUB_TOKEN=ghp_xxx bash scripts/github-publish.sh}"
@@ -42,14 +42,15 @@ if "$GH" release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
   echo "    الإصدار موجود — سيُحدَّث"
 else
   "$GH" release create "$TAG" -R "$REPO" \
-    --title "مكتبة v2.1.0 — شريط PDF وأغلفة أقوى" \
-    --notes-file .github/RELEASE_NOTES_v2.1.0.md
+    --title "مكتبة v2.2.0 — منتقي أغلفة من جوجل وقراءة المحدد ونسخة جوال" \
+    --notes-file .github/RELEASE_NOTES_v2.2.0.md
 fi
 
-echo "==> 5/5 رفع الحزم (~92MB لكل ملف)"
+echo "==> 5/5 رفع الحزم (exe + apk)"
 "$GH" release upload "$TAG" -R "$REPO" --clobber \
   "release/Maktaba-Setup-${VERSION}.exe" \
-  "release/Maktaba-Portable-${VERSION}.exe"
+  "release/Maktaba-Portable-${VERSION}.exe" \
+  "release/Maktaba-${VERSION}.apk"
 
 echo ""
 echo "✅ تم النشر: https://github.com/${REPO}/releases/tag/${TAG}"

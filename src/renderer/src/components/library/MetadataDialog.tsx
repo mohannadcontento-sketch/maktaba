@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, ImageDown, Loader2, Trash2 } from 'lucide-react'
+import { Plus, ImageDown, Loader2, Trash2, Search } from 'lucide-react'
 import type { Book } from '../../../../shared/types'
 import { useLibrary } from '@/stores/library'
 import { useUi } from '@/stores/ui'
 import { Dialog } from '@/components/ui/Dialog'
 import { Button, Input, Textarea, StarRating } from '@/components/ui/kit'
-import { cn, coverUrl } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { CoverPickerDialog } from './CoverPickerDialog'
+import { useCoverSrc } from '@/platform/covers'
 
 const TAG_COLORS = ['#0d9488', '#f59e0b', '#3b82f6', '#ef4444', '#a855f7', '#ec4899']
 
@@ -28,6 +30,8 @@ export function MetadataDialog({ book, open, onClose }: { book: Book; open: bool
   const [coverFetching, setCoverFetching] = useState(false)
   const [coverPreview, setCoverPreview] = useState<string | null>(book.coverPath)
   const [coverBust, setCoverBust] = useState(0)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const previewSrc = useCoverSrc(coverPreview, coverBust > 0)
 
   useEffect(() => {
     if (open && book) {
@@ -102,6 +106,12 @@ export function MetadataDialog({ book, open, onClose }: { book: Book; open: bool
     await lib.reloadOne(book.id)
   }
 
+  // عند اختيار صورة من المنتقي — تحديث المعاينة فورًا
+  const onPickerPicked = (updated: Book): void => {
+    setCoverPreview(updated.coverPath)
+    setCoverBust((b) => b + 1)
+  }
+
   return (
     <Dialog
       open={open}
@@ -120,8 +130,8 @@ export function MetadataDialog({ book, open, onClose }: { book: Book; open: bool
       {/* معاينة الغلاف */}
       <div className="mb-4 flex items-center gap-4 rounded-2xl border border-line bg-surface2/50 p-3 dark:border-dline dark:bg-dsurface2/40">
         <div className="relative h-32 w-22 shrink-0 overflow-hidden rounded-xl shadow-md ring-1 ring-black/10">
-          {coverPreview ? (
-            <img src={coverUrl(coverPreview, coverBust > 0) ?? undefined} alt={book.title} className="h-full w-full object-cover" />
+          {previewSrc ? (
+            <img src={previewSrc} alt={book.title} className="h-full w-full object-cover" />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-teal-600/20 to-emerald-600/20 text-muted">
               <ImageDown size={26} />
@@ -131,6 +141,10 @@ export function MetadataDialog({ book, open, onClose }: { book: Book; open: bool
         <div className="flex min-w-0 flex-col gap-2">
           <p className="text-xs font-medium text-muted">{t('library.coverLabel')}</p>
           <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="soft" onClick={() => setPickerOpen(true)}>
+              <Search size={14} />
+              {t('library.pickFromWeb')}
+            </Button>
             <Button size="sm" variant="soft" onClick={() => void fetchWebCover()} disabled={coverFetching}>
               {coverFetching ? <Loader2 size={14} className="animate-spin" /> : <ImageDown size={14} />}
               {t('library.fetchCover')}
@@ -145,6 +159,14 @@ export function MetadataDialog({ book, open, onClose }: { book: Book; open: bool
           <p className="text-[11px] leading-relaxed text-muted/70">{t('library.coverHint')}</p>
         </div>
       </div>
+
+      {/* منتقي الأغلفة من الويب (2.2) */}
+      <CoverPickerDialog
+        book={{ ...book, title: form.title.trim() || book.title, author: form.author.trim() || book.author }}
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onPicked={onPickerPicked}
+      />
 
       <div className="grid grid-cols-2 gap-3">
         <Field label={t('library.titleField')} className="col-span-2">

@@ -46,6 +46,13 @@ const THEME_RULES: Record<string, string> = {
           img, svg, video { filter: brightness(0.85); }`
 }
 
+/** خلفية صفحة القراءة نفسها — تجعل سطح القراءة يملأ الشاشة كلها بلا حواف رمادية */
+const THEME_BG: Record<string, string> = {
+  day: '#ffffff',
+  sepia: '#f4ecd8',
+  night: '#17191e'
+}
+
 export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }: Props) {
   const reader = useReader()
   const viewerRef = useRef<HTMLDivElement>(null)
@@ -302,8 +309,11 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
           width: '100%',
           height: '100%',
           flow: settings.flow === 'scrolled' ? 'scrolled-doc' : 'paginated',
-          spread: 'none'
-        })
+          spread: 'none',
+          // لا فجوات داخلية بين الأعمدة — النص يملأ العرض المتاح
+          // والهوامش يتحكم فيها المستخدم من الإعدادات وتُطبق على منطقة النص نفسها
+          gap: 0
+        } as Parameters<EpubBook['renderTo']>[1])
         renditionRef.current = rel
         registerThemeHook(rel)
         applyAllThemes(rel, settings)
@@ -703,14 +713,18 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
   const isScrolled = settings.flow === 'scrolled'
 
   return (
-    <div className="relative flex-1 overflow-hidden bg-[#e9e7e2] dark:bg-[#101216]">
+    <div
+      className="relative flex-1 overflow-hidden"
+      style={{ background: THEME_BG[settings.theme] ?? '#ffffff' }}
+    >
       {failed ? (
         <div className="flex h-full flex-col items-center justify-center gap-2">
           <p className="text-lg font-semibold">تعذر فتح هذا الكتاب</p>
           <p className="text-sm opacity-60">قد يكون الملف تالفًا</p>
         </div>
       ) : (
-        /* الهوامش تُطبق هنا — تعمل بشكل صحيح في الوضعين معًا */
+        /* الهوامش تُطبق هنا — تعمل بشكل صحيح في الوضعين معًا، وخلفية الحاوية
+           بلون السمة نفسه فتبدو الهوامش جزءًا من صفحة الكتاب (تطبيق مباشر على النص) */
         <div
           className="h-full w-full"
           style={{

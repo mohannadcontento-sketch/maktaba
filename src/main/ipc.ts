@@ -30,8 +30,31 @@ import {
   updateAnnotation,
   updateBook
 } from './db'
-import { bookFilePath, coversDir, importPaths, removeBookFiles, scanFolderForBooks, fetchAndSaveCover } from './library'
+import { bookFilePath, coversDir, importPaths, removeBookFiles, scanFolderForBooks, fetchAndSaveCover, useWebImageForBook } from './library'
 import { exportBackup, importBackup, pickExportTarget, pickImportSource } from './backup'
+import { searchWebImages, type FetchAdapter } from '../shared/coverEngines'
+import { registerPickerIpc } from './pickerWindow'
+import { net } from 'electron'
+
+/** محوّل الجلب للعملية الرئيسية — يغذي محركات البحث المشتركة */
+const mainFetchAdapter: FetchAdapter = {
+  async fetchText(url, headers, timeoutMs = 12000) {
+    const res = await net.fetch(url, {
+      headers: headers ?? {},
+      signal: AbortSignal.timeout(timeoutMs)
+    })
+    if (!res.ok) throw new Error(`status ${res.status}`)
+    return res.text()
+  },
+  async fetchBytes(url, headers, timeoutMs = 15000) {
+    const res = await net.fetch(url, {
+      headers: headers ?? {},
+      signal: AbortSignal.timeout(timeoutMs)
+    })
+    if (!res.ok) throw new Error(`status ${res.status}`)
+    return { buf: new Uint8Array(await res.arrayBuffer()), contentType: res.headers.get('content-type') ?? '' }
+  }
+}
 
 function win(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0]
@@ -96,6 +119,18 @@ export function registerIpc(): void {
     }
     return null
   })
+
+  // ---------- منتقي الأغلفة (2.2): بحث شبكي + اختيار يدوي ----------
+  ipcMain.handle('covers:searchWeb', async (_e, title: string, author?: string | null) =>
+    searchWebImages(mainFetchAdapter, title, author)
+  )
+
+  ipcMain.handle('covers:useUrl', async (_e, bookId: string, url: string) => {
+    const book = await useWebImageForBook(bookId, url)
+    return book
+  })
+
+  registerPickerIpc()
 
   ipcMain.handle('files:url', async (_e, id: string) => {
     const book = getBook(id)

@@ -1,7 +1,8 @@
 /**
- * محرك القراءة الصوتية (النسخة 2)
- * يعتمد على Web Speech API المدمجة في كروميوم — بلا خدمات خارجية
- * يقسّم النص إلى مقاطع قصيرة لتجاوز حدّ كروميوم في النطق الطويل
+ * محرك القراءة الصوتية (النسخة 2 / 2.2)
+ * سطح المكتب: Web Speech API المدمجة في كروميوم — بلا خدمات خارجية
+ * الجوال: @capacitor-community/text-to-speech (محرك TTS الأندرويد عبر native)
+ * يقسّم النص إلى مقاطع قصيرة لتجاوز حدود النطق الطويل
  * ويتسلسل تلقائيًا عبر المقاطع مع دعم الإيقاف المؤقت والاستئناف
  */
 
@@ -40,8 +41,123 @@ export interface TtsOptions {
   /** يُستدعى عند انتهاء كل المقاطع */
   onDone?(): void
   /** يُستدعى عند خطأ في النطق */
-  onError?(e: SpeechSynthesisErrorEvent): void
+  onError?(e: unknown): void
 }
+
+// ---------- خلفيات النطق ----------
+
+interface SpeechBackend {
+  /** ينطق نصًا واحدًا — يعالج عند الاكتمال */
+  speak(text: string, rate: number, lang: string): Promise<void>
+  stop(): void
+  pause(): void
+  resume(): void
+}
+
+/** كشف منصة الجوال دون استيراد ثابت لطبقة الكاباسيتور */
+function isNativePlatform(): boolean {
+  try {
+    return !!(window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.()
+  } catch {
+    return false
+  }
+}
+
+/** خلفية الويب — SpeechSynthesisUtterance ملفوفة بوعد */
+function webBackend(): SpeechBackend {
+  return {
+    speak(text, rate, lang) {
+      return new Promise<void>((resolve) => {
+        try {
+          const u = new SpeechSynthesisUtterance(text)
+          u.rate = Math.min(3, Math.max(0.5, rate))
+          u.lang = lang
+          const voice = pickVoice(null, lang)
+          if (voice) u.voice = voice
+          u.onend = () => resolve()
+          u.onerror = (e) => {
+            if (e.error !== 'interrupted' && e.error !== 'canceled') {
+              console.warn('tts web error', e.error)
+            }
+            resolve()
+          }
+          window.speechSynthesis.speak(u)
+        } catch {
+          resolve()
+        }
+      })
+    },
+    stop() {
+      try {
+        window.speechSynthesis.cancel()
+      } catch {
+        /* ignore */
+      }
+    },
+    pause() {
+      try {
+        window.speechSynthesis.pause()
+      } catch {
+        /* ignore */
+      }
+    },
+    resume() {
+      try {
+        window.speechSynthesis.resume()
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/** خلفية الجوال — المكوّن الأصلي (تحميل ديناميكي، يُستدعى على الأجهزة فقط) */
+let nativeBackendPromise: Promise<SpeechBackend | null> | null = null
+function nativeBackend(): Promise<SpeechBackend | null> {
+  if (!nativeBackendPromise) {
+    nativeBackendPromise = (async () => {
+      try {
+        const mod = (await import('@capacitor-community/text-to-speech')) as unknown as {
+          TextToSpeech: {
+            speak(o: { text: string; lang: string; rate: number; pitch: number; volume: number }): Promise<void>
+            stop(): Promise<void>
+            pause(): Promise<void>
+            resume(): Promise<void>
+          }
+        }
+        const ttsPlugin = mod.TextToSpeech
+        return {
+          async speak(text, rate, lang) {
+            await ttsPlugin.speak({ text, lang, rate, pitch: 1.0, volume: 1.0 })
+          },
+          async stop() {
+            await ttsPlugin.stop().catch(() => {})
+          },
+          async pause() {
+            await ttsPlugin.pause().catch(() => {})
+          },
+          async resume() {
+            await ttsPlugin.resume().catch(() => {})
+          }
+        }
+      } catch (e) {
+        console.warn('native tts unavailable', e)
+        return null
+      }
+    })()
+  }
+  return nativeBackendPromise
+}
+
+let activeBackend: SpeechBackend | null = null
+async function getBackend(): Promise<SpeechBackend> {
+  if (!activeBackend) {
+    activeBackend = isNativePlatform() ? (await nativeBackend()) ?? webBackend() : webBackend()
+  }
+  return activeBackend
+}
+
+// ---------- المحرك ----------
 
 export class TtsEngine {
   private queue: TtsSegment[] = []
@@ -49,7 +165,6 @@ export class TtsEngine {
   private pieceQueue: Array<{ text: string; chunkIndex: number }> = []
   private stopped = true
   private paused = false
-  private current: SpeechSynthesisUtterance | null = null
 
   get isStopped(): boolean {
     return this.stopped
@@ -60,51 +175,37 @@ export class TtsEngine {
   }
 
   speak(chunks: Array<{ text: string }>, opts: TtsOptions): void {
-    this.stop(false)
+    void this.stop(false)
     this.queue = chunks.map((c, i) => ({ text: c.text, chunkIndex: i }))
     this.opts = opts
     this.stopped = false
     this.paused = false
-    this.drain()
+    void this.drain()
   }
 
   pause(): void {
     if (this.stopped || this.paused) return
     this.paused = true
-    try {
-      window.speechSynthesis.pause()
-    } catch {
-      /* ignore */
-    }
+    void getBackend().then((b) => b.pause())
   }
 
   resume(): void {
     if (!this.paused) return
     this.paused = false
-    try {
-      window.speechSynthesis.resume()
-    } catch {
-      /* ignore */
-    }
+    void getBackend().then((b) => b.resume())
   }
 
-  stop(fireCleanup = true): void {
+  async stop(fireCleanup = true): Promise<void> {
     this.stopped = true
     this.paused = false
     this.pieceQueue = []
     this.queue = []
-    this.current = null
-    try {
-      window.speechSynthesis.cancel()
-    } catch {
-      /* ignore */
-    }
-    if (fireCleanup && this.opts) {
-      // لا شيء إضافي حاليًا
-    }
+    void fireCleanup
+    const b = await getBackend()
+    b.stop()
   }
 
-  private drain(): void {
+  private async drain(): Promise<void> {
     if (this.stopped) return
     if (!this.pieceQueue.length) {
       const next = this.queue.shift()
@@ -117,39 +218,26 @@ export class TtsEngine {
       const pieces = splitText(next.text)
       if (!pieces.length) {
         // فقرة فارغة → التالية فورًا
-        setTimeout(() => this.drain(), 30)
+        setTimeout(() => void this.drain(), 30)
         return
       }
       this.pieceQueue = pieces.map((text) => ({ text, chunkIndex: next.chunkIndex }))
     }
     const piece = this.pieceQueue.shift()
     if (!piece) {
-      setTimeout(() => this.drain(), 30)
+      setTimeout(() => void this.drain(), 30)
       return
     }
     try {
-      const u = new SpeechSynthesisUtterance(piece.text)
-      const { rate, voiceUri } = this.opts ?? { rate: 1, voiceUri: null }
-      u.rate = Math.min(3, Math.max(0.5, rate))
-      u.lang = voiceLang()
-      const voice = pickVoice(voiceUri, u.lang)
-      if (voice) u.voice = voice
-      u.onend = () => {
-        if (this.stopped) return
-        setTimeout(() => this.drain(), 60)
-      }
-      u.onerror = (e) => {
-        if (this.stopped) return
-        // 'interrupted'/'canceled' طبيعية عند الإيقاف — لا نعتبرها خطأ
-        if (e.error === 'interrupted' || e.error === 'canceled') return
-        this.opts?.onError?.(e)
-        setTimeout(() => this.drain(), 60)
-      }
-      this.current = u
-      window.speechSynthesis.speak(u)
+      const backend = await getBackend()
+      if (this.stopped) return
+      await backend.speak(piece.text, this.opts?.rate ?? 1, voiceLang())
+      if (this.stopped) return
+      setTimeout(() => void this.drain(), 40)
     } catch (e) {
       console.warn('tts speak failed', e)
-      setTimeout(() => this.drain(), 60)
+      this.opts?.onError?.(e)
+      setTimeout(() => void this.drain(), 60)
     }
   }
 }
@@ -158,19 +246,23 @@ function voiceLang(): string {
   return document.documentElement.lang === 'en' ? 'en-US' : 'ar-SA'
 }
 
-/** اختيار صوت مناسب: المحفوظ أولًا ثم أول صوت بلغة الكتاب */
+/** اختيار صوت مناسب: المحفوظ أولًا ثم أول صوت بلغة الكتاب (ويب فقط) */
 export function pickVoice(savedUri: string | null, lang: string): SpeechSynthesisVoice | null {
-  const voices = window.speechSynthesis.getVoices()
-  if (!voices.length) return null
-  if (savedUri) {
-    const hit = voices.find((v) => v.voiceURI === savedUri)
-    if (hit) return hit
+  try {
+    const voices = window.speechSynthesis.getVoices()
+    if (!voices.length) return null
+    if (savedUri) {
+      const hit = voices.find((v) => v.voiceURI === savedUri)
+      if (hit) return hit
+    }
+    const prefix = lang.split('-')[0]
+    return voices.find((v) => v.lang?.toLowerCase().startsWith(prefix)) ?? null
+  } catch {
+    return null
   }
-  const prefix = lang.split('-')[0]
-  return voices.find((v) => v.lang?.toLowerCase().startsWith(prefix)) ?? null
 }
 
-/** الصوت المتاح بلغة معينة (لعرضه في القوائم) */
+/** الصوت المتاح بلغة معينة (لعرضه في القوائم — ويب فقط) */
 export function voicesFor(langPrefix: string): SpeechSynthesisVoice[] {
   try {
     return window.speechSynthesis.getVoices().filter((v) => v.lang?.toLowerCase().startsWith(langPrefix))

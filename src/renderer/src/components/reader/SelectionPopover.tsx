@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Highlighter, Underline, StickyNote, Copy, Globe } from 'lucide-react'
+import { Highlighter, Underline, StickyNote, Copy, Globe, Volume2 } from 'lucide-react'
 import { useReader, HIGHLIGHT_COLORS } from '@/stores/reader'
 import { useUi } from '@/stores/ui'
+import { useTranslation } from 'react-i18next'
 
 /**
  * لوحة عائمة فوق نص محدد تعرض أدوات التمييز/التسطير/الملاحظة/النسخ
@@ -11,6 +12,7 @@ export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
   const sel = useReader((s) => s.selection)
   const setSelection = useReader((s) => s.setSelection)
   const ui = useUi()
+  const { t } = useTranslation()
   const [pos, setPos] = useState({ top: -9999, left: -9999 })
   const [showColors, setShowColors] = useState(false)
 
@@ -36,6 +38,13 @@ export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
           .__epubCreateAnnotation
     fn?.(type, color)
     if (!isPdf) setSelection(null)
+  }
+
+  // قراءة النص المحدد صوتيًا فقط (النسخة 2.2) — بدل قراءة النص كله
+  const speakSelection = (): void => {
+    if (!sel?.text) return
+    ;(window as unknown as { __maktabaSpeakSelection?: (text: string) => void }).__maktabaSpeakSelection?.(sel.text)
+    setSelection(null)
   }
 
   return (
@@ -84,6 +93,13 @@ export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
         <StickyNote size={15} />
       </button>
       <span className="mx-0.5 h-5 w-px bg-black/10 dark:bg-white/15" />
+      <button
+        className="rounded-lg px-2 py-1.5 text-accent hover:bg-black/[0.06] dark:hover:bg-white/10"
+        title={t('reader.readSelection')}
+        onClick={speakSelection}
+      >
+        <Volume2 size={15} />
+      </button>
       <button
         className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
         title="نسخ"

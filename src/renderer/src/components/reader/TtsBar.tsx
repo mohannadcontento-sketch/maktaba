@@ -15,6 +15,9 @@ interface Props {
   isPdf: boolean
   engine: { pdf?: PdfHandle; epub?: EpubHandle }
   autoStart: boolean
+  /** نص محدد من المستخدم — عند توفره يُنطق هذا النص فقط بدل الكتاب كله (2.2) */
+  selectionText?: string | null
+  onSelectionDone?(): void
   onClose(): void
 }
 
@@ -22,8 +25,9 @@ interface Props {
  * شريط القراءة الصوتية (النسخة 2)
  * EPUB: يقرأ فقرةً فقرة مع متابعة العرض تلقائيًا والانتقال بين الأقسام
  * PDF: يقرأ نص الصفحة الحالية ثم ينتقل للصفحة التالية
+ * 2.2: وضع قراءة النص المحدد — ينطق النص الذي اختاره المستخدم فقط ثم يتوقف
  */
-export function TtsBar({ isPdf, engine, autoStart, onClose }: Props) {
+export function TtsBar({ isPdf, engine, autoStart, selectionText, onSelectionDone, onClose }: Props) {
   const { t } = useTranslation()
   const [state, setState] = useState<'idle' | 'playing' | 'paused'>('idle')
   const [rate, setRate] = useState(1)
@@ -31,6 +35,11 @@ export function TtsBar({ isPdf, engine, autoStart, onClose }: Props) {
   const rateRef = useRef(1)
   const pendingResolveRef = useRef<(() => void) | null>(null)
   const startedRef = useRef(false)
+  const selTextRef = useRef<string | null>(selectionText ?? null)
+
+  useEffect(() => {
+    selTextRef.current = selectionText ?? null
+  }, [selectionText])
 
   useEffect(() => {
     void window.api.getSetting('tts.rate').then((v) => {
@@ -102,6 +111,18 @@ export function TtsBar({ isPdf, engine, autoStart, onClose }: Props) {
     }
   }, [engine, speakChunks])
 
+  // قراءة النص المحدد فقط ثم التوقف (2.2)
+  const runSelection = useCallback(async (): Promise<void> => {
+    const text = selTextRef.current?.trim()
+    if (!text) return
+    await speakChunks([{ text }])
+  }, [speakChunks])
+
+  const runLoop = useCallback((): Promise<void> => {
+    if (selTextRef.current?.trim()) return runSelection()
+    return isPdf ? runPdf() : runEpub()
+  }, [isPdf, runEpub, runPdf, runSelection])
+
   const start = useCallback((): void => {
     if (state === 'playing') return
     if (state === 'paused') {
@@ -112,12 +133,17 @@ export function TtsBar({ isPdf, engine, autoStart, onClose }: Props) {
     stopRef.current = false
     setState('playing')
     useReader.getState().setTtsPlaying(true)
-    void (isPdf ? runPdf() : runEpub()).finally(() => {
+    void runLoop().finally(() => {
       tts.stop()
       setState('idle')
       useReader.getState().setTtsPlaying(false)
+      // انتهى نطق المحدد — نبليح الأب لإزالة الحالة
+      if (selTextRef.current) {
+        selTextRef.current = null
+        onSelectionDone?.()
+      }
     })
-  }, [isPdf, runEpub, runPdf, state])
+  }, [onSelectionDone, runLoop, state])
 
   const pause = useCallback((): void => {
     if (state !== 'playing') return
@@ -170,7 +196,7 @@ export function TtsBar({ isPdf, engine, autoStart, onClose }: Props) {
       setTimeout(() => {
         stopRef.current = false
         setState('playing')
-        void (isPdf ? runPdf() : runEpub()).finally(() => {
+        void runLoop().finally(() => {
           tts.stop()
           setState('idle')
         })
@@ -182,6 +208,9 @@ export function TtsBar({ isPdf, engine, autoStart, onClose }: Props) {
     <div className="absolute bottom-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-2xl border border-line bg-surface px-3 py-2 shadow-2xl dark:border-dline dark:bg-dsurface2">
       <Volume2 size={16} className="text-accent" />
       <span className="text-xs font-semibold">{t('reader.tts')}</span>
+      {selTextRef.current && (
+        <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-bold text-accent">{t('reader.ttsSelectionMode')}</span>
+      )}
 
       <span className="mx-1 h-5 w-px bg-line dark:bg-dline" />
 

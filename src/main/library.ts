@@ -446,7 +446,7 @@ async function collectCoverCandidates(title: string, author?: string | null): Pr
 /**
  * قراءة أبعاد الصورة من الترويسة (PNG: IHDR، JPEG: علامات SOF) — دون فك ترميز كامل
  */
-function imageDims(buf: Buffer): { w: number; h: number } | null {
+export function imageDims(buf: Buffer): { w: number; h: number } | null {
   try {
     if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
       return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }
@@ -478,7 +478,7 @@ function imageDims(buf: Buffer): { w: number; h: number } | null {
 }
 
 /** هل Buffer صورة غلاف مقبولة؟ (حجم + أبعاد + نسبة أبعاد معقولة) */
-function validCoverImage(buf: Buffer): boolean {
+export function validCoverImage(buf: Buffer): boolean {
   if (buf.length < 2000) return false
   const d = imageDims(buf)
   if (!d) return buf.length > 8000 // صيغة غير معروفة: نقبلها فقط إن كان حجمها معقولًا
@@ -503,6 +503,43 @@ export async function downloadImage(url: string): Promise<Buffer | null> {
   } catch {
     return null
   }
+}
+
+/**
+ * تنزيل صورة مختارة يدويًا من منتقي الأغلفة — تحقق مخفف:
+ * نحترم اختيار المستخدم فلا نرفض بالنسبة أو الأبعاد، فقط نتأكد أنها صورة حقيقية غير فارغة
+ */
+export async function downloadImageRelaxed(url: string): Promise<Buffer | null> {
+  try {
+    const res = await net.fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', Accept: 'image/*,*/*;q=0.8' },
+      signal: AbortSignal.timeout(15000)
+    })
+    if (!res.ok) return null
+    const ctype = res.headers.get('content-type') ?? ''
+    if (ctype && !ctype.startsWith('image/')) return null
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (buf.length < 500) return null
+    const d = imageDims(buf)
+    if (d && (d.w < 32 || d.h < 32)) return null // أبعاد وهمية/عنصر زخرفي
+    return buf
+  } catch {
+    return null
+  }
+}
+
+/**
+ * تنزيل صورة مختارة يدويًا وحفظها غلافًا للكتاب — يعيد الكتاب بعد التحديث
+ */
+export async function useWebImageForBook(bookId: string, url: string): Promise<ReturnType<typeof getBook>> {
+  const buf = await downloadImageRelaxed(url)
+  if (!buf) return null
+  const ext = buf[0] === 0x89 ? 'png' : 'jpg'
+  const file = path.join(coversDir(), `${bookId}.${ext}`)
+  fs.writeFileSync(file, buf)
+  updateBook(bookId, { coverPath: file })
+  const { getBook } = await import('./db')
+  return getBook(bookId)
 }
 
 async function fetchJson(url: string, timeoutMs = 8000): Promise<unknown> {

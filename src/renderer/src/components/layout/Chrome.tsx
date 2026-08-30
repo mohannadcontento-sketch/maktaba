@@ -4,18 +4,25 @@ import { Minus, Square, Copy, X } from 'lucide-react'
 import { useUi } from '@/stores/ui'
 import { cn } from '@/lib/utils'
 
-/** أزرار التحكم بالنافذة (تصميم Windows) */
+/** أزرار التحكم بالنافذة (تصميم Windows) — تخفى على الجوال حيث تدير النظام النافذة */
 export function WindowControls() {
   const [maximized, setMaximized] = useState(false)
 
+  const isMobile =
+    typeof window !== 'undefined' &&
+    !!(window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.()
+
   useEffect(() => {
+    if (isMobile) return
     void window.api.isMaximized().then(setMaximized)
     const onResize = (): void => {
       void window.api.isMaximized().then(setMaximized)
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
-  }, [])
+  }, [isMobile])
+
+  if (isMobile) return null
 
   const btn =
     'no-drag flex h-full w-11 items-center justify-center text-muted transition-colors hover:bg-black/[0.06] dark:hover:bg-white/10 active:scale-95'

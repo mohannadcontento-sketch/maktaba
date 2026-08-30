@@ -1,6 +1,6 @@
 import { memo, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MoreVertical, BookOpen, Star, Heart, FolderPlus, FolderMinus, ExternalLink, Trash2, Pencil, CheckCheck, RotateCcw, FileText } from 'lucide-react'
+import { MoreVertical, BookOpen, Star, Heart, FolderPlus, FolderMinus, ExternalLink, Trash2, Pencil, CheckCheck, RotateCcw, FileText, ImageDown } from 'lucide-react'
 import type { Book } from '../../../../shared/types'
 import { useLibrary } from '@/stores/library'
 import { useUi } from '@/stores/ui'
@@ -8,7 +8,9 @@ import { cn, formatBytes, formatRelativeTime, coverUrl } from '@/lib/utils'
 import { ProgressBar, Badge } from '@/components/ui/kit'
 import { DropdownMenu, ContextMenu, type MenuItem } from '@/components/ui/Menu'
 import { MetadataDialog } from './MetadataDialog'
+import { CoverPickerDialog } from './CoverPickerDialog'
 import { AddToShelfDialog } from './AddToShelfDialog'
+import { useCoverSrc } from '@/platform/covers'
 
 interface CardProps {
   book: Book
@@ -30,7 +32,7 @@ export function CoverImage({ book, className }: { book: Book; className?: string
     [book.id]
   )
 
-  const src = useMemo(() => coverUrl(book.coverPath), [book.coverPath])
+  const src = useCoverSrc(book.coverPath)
   const showImg = !!src && brokenPath !== book.coverPath
 
   if (showImg && src) {
@@ -72,6 +74,10 @@ export const BookCard = memo(function BookCard({ book, onOpen, collectionId }: C
   const [editOpen, setEditOpen] = useState(false)
   const [shelfOpen, setShelfOpen] = useState(false)
   const [ctx, setCtx] = useState<{ x: number; y: number } | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickedBust, setPickedBust] = useState(0)
+
+  void pickedBust
 
   const items = (): MenuItem[] => [
     { label: t('library.openBook'), icon: <BookOpen size={14} />, onClick: () => onOpen(book) },
@@ -85,6 +91,7 @@ export const BookCard = memo(function BookCard({ book, onOpen, collectionId }: C
     },
     { divider: true, label: '' },
     { label: t('library.editMetadata'), icon: <Pencil size={14} />, onClick: () => setEditOpen(true) },
+    { label: t('library.pickFromWeb'), icon: <ImageDown size={14} />, onClick: () => setPickerOpen(true) },
     {
       label: t('library.addToCollection'),
       icon: <FolderPlus size={14} />,
@@ -186,6 +193,13 @@ export const BookCard = memo(function BookCard({ book, onOpen, collectionId }: C
       </div>
 
       {ctx && <ContextMenu x={ctx.x} y={ctx.y} items={[...menuItems]} onClose={() => setCtx(null)} />}
+
+      <CoverPickerDialog
+        book={book}
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onPicked={() => setPickedBust((b) => b + 1)}
+      />
 
       <MetadataDialog book={book} open={editOpen} onClose={() => setEditOpen(false)} />
       <AddToShelfDialog book={book} open={shelfOpen} onClose={() => setShelfOpen(false)} />
