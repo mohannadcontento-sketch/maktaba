@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Minus, Square, Copy, X } from 'lucide-react'
-import { useUi } from '@/stores/ui'
+import { Minus, Square, Copy, X, BookOpen, BarChart3, Settings2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { useUi, type PageName } from '@/stores/ui'
 import { cn } from '@/lib/utils'
 
 /** أزرار التحكم بالنافذة (تصميم Windows) — تخفى على الجوال حيث تدير النظام النافذة */
@@ -81,6 +82,40 @@ export function TitleBar({
         </div>
       </div>
     </header>
+  )
+}
+
+/** تنقل سفلي للجوال (مكتبة/إحصاءات/إعدادات) — بديل الشريط الجانبي الذي يستهلك عرض الشاشة */
+export function BottomTabs() {
+  const { t } = useTranslation()
+  const page = useUi((s) => s.page)
+  const shown: PageName = page === 'reader' ? 'library' : page
+  const tabs: { id: PageName; label: string; icon: ReactNode }[] = [
+    { id: 'library', label: t('nav.library'), icon: <BookOpen size={21} /> },
+    { id: 'stats', label: t('nav.stats'), icon: <BarChart3 size={21} /> },
+    { id: 'settings', label: t('nav.settings'), icon: <Settings2 size={21} /> }
+  ]
+  return (
+    <nav
+      className="fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-surface/95 backdrop-blur dark:border-dline dark:bg-dsurface/95"
+      style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+    >
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          onClick={() => useUi.getState().setPage(tab.id)}
+          className={cn(
+            'flex flex-1 flex-col items-center gap-0.5 pb-2 pt-2.5 text-[11px] font-medium transition-colors active:scale-95',
+            shown === tab.id
+              ? 'text-accent-strong dark:text-daccent'
+              : 'text-muted dark:text-dmuted'
+          )}
+        >
+          {tab.icon}
+          <span>{tab.label}</span>
+        </button>
+      ))}
+    </nav>
   )
 }
 

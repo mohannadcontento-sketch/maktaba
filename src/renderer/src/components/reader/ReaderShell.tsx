@@ -21,15 +21,13 @@ import {
 import { useUi } from '@/stores/ui'
 import { useReader, DEFAULT_READER_SETTINGS, READER_FONTS, READER_ALIGNS, type ReaderSettings } from '@/stores/reader'
 import type { Book } from '../../../../shared/types'
-import type { PdfHandle } from './PdfReader'
-import type { TocItem } from '@/lib/pdfEngine'
-import { PdfReader } from './PdfReader'
+import type { PdfHandle, TocItem } from '@/lib/pdfEngine'
+import { PdfViewer } from './PdfViewer'
 import type { EpubHandle, TocEntry } from './EpubReader'
 import type { EpubSearchMatch } from '@/lib/epubSearch'
 import { EpubReader } from './EpubReader'
 import { SidePanel, SearchBar } from './SidePanels'
 import { SelectionPopover } from './SelectionPopover'
-import { PrintDialog } from './PrintDialog'
 import { NoteEditor } from './NoteEditor'
 import { TtsBar } from './TtsBar'
 import { WindowControls } from '@/components/layout/Chrome'
@@ -58,7 +56,6 @@ export function ReaderShell({ book }: { book: Book }) {
   const [percent, setPercent] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(0)
-  const [printOpen, setPrintOpen] = useState(false)
   const [isBookmarked, setIsBookmarked] = useState(false)
   const [remainingMin, setRemainingMin] = useState<number | null>(null)
   // القراءة الصوتية (النسخة 2)
@@ -256,8 +253,11 @@ export function ReaderShell({ book }: { book: Book }) {
           break
         case 'f':
         case 'F':
-          // بحث داخل المستند — للصيغتين (النسخة 2)
-          if (e.ctrlKey || e.metaKey || !isPdf) {
+          if (isPdf) {
+            // البحث الرسمي داخل عارض موزيلا (شريطه الخاص)
+            e.preventDefault()
+            void engine.pdf?.runSearch('')
+          } else {
             e.preventDefault()
             reader.setSearchOpen(true)
           }
@@ -279,14 +279,11 @@ export function ReaderShell({ book }: { book: Book }) {
           break
         case 'Escape':
           if (reader.zenMode) reader.setZen(false)
-          else if (reader.searchOpen) {
+          else if (reader.searchOpen && !isPdf) {
             reader.setSearchOpen(false)
-            if (isPdf) engine.pdf?.runSearch('')
-            else {
-              useReader.getState().setEpubQuery('')
-              useReader.getState().setEpubMatches([])
-              engine.epub?.clearSearch()
-            }
+            useReader.getState().setEpubQuery('')
+            useReader.getState().setEpubMatches([])
+            engine.epub?.clearSearch()
           }
           break
       }
@@ -306,9 +303,9 @@ export function ReaderShell({ book }: { book: Book }) {
 
   return (
     <div className="flex h-full flex-col">
-      {/* الشريط العلوي */}
+      {/* الشريط العلوي — مع مساحة أمان الشاشات النافذة على الجوال */}
       {!zen && (
-        <header className="drag-region relative z-30 flex h-[52px] shrink-0 select-none items-center gap-1 border-b border-line bg-surface px-3 dark:border-dline dark:bg-dsurface">
+        <header className="drag-region relative z-30 flex h-[calc(52px+env(safe-area-inset-top,0px))] shrink-0 select-none items-center gap-1 border-b border-line bg-surface px-3 pt-[env(safe-area-inset-top,0px)] dark:border-dline dark:bg-dsurface">
           <IconButton title={t('reader.backToLibrary')} onClick={goBack} className="no-drag">
             <ArrowRight size={18} />
           </IconButton>
@@ -319,24 +316,17 @@ export function ReaderShell({ book }: { book: Book }) {
 
           <span className="mx-2 h-6 w-px bg-line dark:bg-dline" />
 
-          {!zen && (
+          {/* الفهرس والمصغرات والبحث والطباعة يقودها عارض موزيلا نفسه في PDF */}
+          {!zen && !isPdf && (
             <IconButton title="اللوحة الجانبية" active={!!reader.sidebarPanel} onClick={() => reader.setSidebarPanel(reader.sidebarPanel === 'toc' ? null : 'toc')}>
               <ListTree size={17} />
             </IconButton>
           )}
-          {isPdf && (
-            <IconButton title={t('reader.thumbnails')} active={reader.sidebarPanel === 'thumbs'} onClick={() => reader.setSidebarPanel('thumbs')}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="3" width="8" height="8" rx="1" />
-                <rect x="13" y="3" width="8" height="8" rx="1" />
-                <rect x="3" y="13" width="8" height="8" rx="1" />
-                <rect x="13" y="13" width="8" height="8" rx="1" />
-              </svg>
+          {!isPdf && (
+            <IconButton title={t('reader.searchDoc')} active={reader.searchOpen} onClick={() => reader.toggleSearch()}>
+              <Search size={17} />
             </IconButton>
           )}
-          <IconButton title={t('reader.searchDoc')} active={reader.searchOpen} onClick={() => reader.toggleSearch()}>
-            <Search size={17} />
-          </IconButton>
           <IconButton title={t('reader.annotations')} active={reader.sidebarPanel === 'annotations'} onClick={() => reader.setSidebarPanel('annotations')}>
             <Highlighter size={17} />
           </IconButton>
@@ -386,12 +376,6 @@ export function ReaderShell({ book }: { book: Book }) {
               </>
             )}
           </div>
-
-          {isPdf && (
-            <IconButton title={t('reader.print')} onClick={() => setPrintOpen(true)}>
-              <Printer size={16} />
-            </IconButton>
-          )}
 
           <IconButton
             title={reader.nightInvert || settings.theme === 'night' ? t('reader.dayMode') : t('reader.nightMode')}
@@ -443,7 +427,7 @@ export function ReaderShell({ book }: { book: Book }) {
 
         <main className="relative flex min-w-0 flex-1">
           {isPdf ? (
-            <PdfReader book={book} onDocReady={onPdfReady} onPageChange={onEpdfPageChange} />
+            <PdfViewer book={book} onDocReady={onPdfReady} onPageChange={onEpdfPageChange} />
           ) : (
             <EpubReader
               book={book}
@@ -454,7 +438,7 @@ export function ReaderShell({ book }: { book: Book }) {
             />
           )}
 
-          <SearchBar isPdf={isPdf} />
+          {!isPdf && reader.searchOpen && <SearchBar isPdf={false} />}
 
           {/* شريط القراءة الصوتية (النسخة 2) — مع وضع قراءة المحدد (2.2) */}
           {ttsOpen && (
@@ -484,14 +468,14 @@ export function ReaderShell({ book }: { book: Book }) {
           {!isPdf && !reader.selection && (
             <>
               <button
-                className="absolute start-0 top-0 z-10 flex h-full w-10 items-center justify-start ps-1 opacity-30 transition-opacity hover:opacity-90"
+                className="absolute start-0 top-0 z-10 hidden h-full w-10 items-center justify-start ps-1 opacity-30 transition-opacity hover:opacity-90 md:flex"
                 onClick={() => (epubRtl ? engine.epub?.prev() : engine.epub?.next())}
                 title={epubRtl ? 'السابق' : 'التالي'}
               >
                 {epubRtl ? <ChevronRight size={26} /> : <ChevronLeft size={26} />}
               </button>
               <button
-                className="absolute end-0 top-0 z-10 flex h-full w-10 items-center justify-end pe-1 opacity-30 transition-opacity hover:opacity-90"
+                className="absolute end-0 top-0 z-10 hidden h-full w-10 items-center justify-end pe-1 opacity-30 transition-opacity hover:opacity-90 md:flex"
                 onClick={() => (epubRtl ? engine.epub?.next() : engine.epub?.prev())}
                 title={epubRtl ? 'التالي' : 'السابق'}
               >
@@ -503,7 +487,6 @@ export function ReaderShell({ book }: { book: Book }) {
 
         <SelectionPopover isPdf={isPdf} />
         <NoteEditor />
-        <PrintDialog open={printOpen} onClose={() => setPrintOpen(false)} numPages={totalPages} currentPage={currentPage} />
       </div>
     </div>
   )
@@ -536,7 +519,9 @@ function DisplayOptionsDrawer({
 }) {
   const { t } = useTranslation()
   return (
-    <div className="absolute end-3 top-3 z-40 anim-in w-72 rounded-2xl border border-line bg-surface p-4 shadow-2xl dark:border-dline dark:bg-dsurface2">
+    /* الجوال: شيت سفلي بعرض كامل — الكمبيوتر: لوحة عائمة كما كانت */
+    <div className="anim-in fixed inset-x-0 bottom-0 z-40 max-h-[76vh] overflow-y-auto rounded-t-2xl border-t border-line bg-surface p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] shadow-2xl dark:border-dline dark:bg-dsurface2 md:absolute md:inset-x-auto md:bottom-auto md:end-3 md:top-3 md:max-h-none md:w-72 md:rounded-2xl md:border md:pb-4">
+      <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-line dark:bg-dline md:hidden" />
       <div className="mb-3 flex items-center justify-between">
         <p className="text-sm font-bold">{t('reader.displayOptions')}</p>
         <div className="flex items-center gap-2">

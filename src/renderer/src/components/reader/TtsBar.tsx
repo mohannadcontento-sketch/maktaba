@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Play, Pause, Square, Volume2, X } from 'lucide-react'
 import { useReader } from '@/stores/reader'
 import { tts } from '@/lib/tts'
-import type { PdfHandle } from './PdfReader'
+import type { PdfHandle } from '@/lib/pdfEngine'
 import type { EpubHandle } from './EpubReader'
 import { cn } from '@/lib/utils'
 

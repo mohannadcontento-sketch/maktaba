@@ -30,6 +30,10 @@ export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
 
   if (!sel) return null
 
+  // أدوات التمييز تحتاج محرك تُسجّل عنده — PDF (عارض موزيلا) يستخدم أداة التمييز الرسمية بدلها
+  const canAnnotate =
+    !isPdf || !!(window as unknown as { __pdfCreateAnnotation?: unknown }).__pdfCreateAnnotation
+
   const create = (type: 'highlight' | 'underline' | 'note', color: string): void => {
     const fn = isPdf
       ? (window as unknown as { __pdfCreateAnnotation?: (t: typeof type, c: string) => void })
@@ -53,45 +57,49 @@ export function SelectionPopover({ isPdf }: { isPdf: boolean }) {
       style={{ top: pos.top, left: pos.left }}
       onMouseDown={(e) => e.preventDefault()}
     >
-      {/* تمييز بألوان */}
-      <div className="relative">
-        <button
-          className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-black/[0.06] dark:hover:bg-white/10"
-          onClick={() => setShowColors((s) => !s)}
-          title="تمييز"
-        >
-          <Highlighter size={15} />
-        </button>
-        {showColors && (
-          <div className="absolute start-0 top-full mt-1 flex gap-1 rounded-xl border border-black/10 bg-white p-1.5 shadow-lg dark:border-white/15 dark:bg-dsurface2">
-            {HIGHLIGHT_COLORS.map((c) => (
-              <button
-                key={c}
-                className="h-6 w-6 rounded-full ring-offset-1 transition-transform hover:scale-110"
-                style={{ backgroundColor: c }}
-                onClick={() => {
-                  create('highlight', c)
-                  setShowColors(false)
-                }}
-              />
-            ))}
+      {/* تمييز بألوان — يظهر فقط حيث يوجد محرك تمييز (EPUB دائمًا، PDF بعارضه الرسمي لا) */}
+      {canAnnotate && (
+        <>
+          <div className="relative">
+            <button
+              className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-black/[0.06] dark:hover:bg-white/10"
+              onClick={() => setShowColors((s) => !s)}
+              title="تمييز"
+            >
+              <Highlighter size={15} />
+            </button>
+            {showColors && (
+              <div className="absolute start-0 top-full mt-1 flex gap-1 rounded-xl border border-black/10 bg-white p-1.5 shadow-lg dark:border-white/15 dark:bg-dsurface2">
+                {HIGHLIGHT_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    className="h-6 w-6 rounded-full ring-offset-1 transition-transform hover:scale-110"
+                    style={{ backgroundColor: c }}
+                    onClick={() => {
+                      create('highlight', c)
+                      setShowColors(false)
+                    }}
+                  />
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      <button
-        className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
-        title="تسطير"
-        onClick={() => create('underline', '#3b82f6')}
-      >
-        <Underline size={15} />
-      </button>
-      <button
-        className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
-        title="ملاحظة"
-        onClick={() => create('note', '#f59e0b')}
-      >
-        <StickyNote size={15} />
-      </button>
+          <button
+            className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
+            title="تسطير"
+            onClick={() => create('underline', '#3b82f6')}
+          >
+            <Underline size={15} />
+          </button>
+          <button
+            className="rounded-lg px-2 py-1.5 hover:bg-black/[0.06] dark:hover:bg-white/10"
+            title="ملاحظة"
+            onClick={() => create('note', '#f59e0b')}
+          >
+            <StickyNote size={15} />
+          </button>
+        </>
+      )}
       <span className="mx-0.5 h-5 w-px bg-black/10 dark:bg-white/15" />
       <button
         className="rounded-lg px-2 py-1.5 text-accent hover:bg-black/[0.06] dark:hover:bg-white/10"

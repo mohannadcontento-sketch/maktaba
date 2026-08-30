@@ -76,3 +76,17 @@ export function isRtlLang(lang: string | null | undefined): boolean {
   const l = (lang || 'ar').toLowerCase().trim()
   return ['ar', 'he', 'fa', 'ur', 'ps', 'sd'].some((p) => l === p || l.startsWith(`${p}-`) || l.startsWith(`${p}_`))
 }
+
+/**
+ * هل نعمل داخل Capacitor على الجوال؟
+ * (يدعم تجاوز الاختبارات: window.__mkForceMobile = true/false)
+ */
+export function isMobilePlatform(): boolean {
+  const w = window as unknown as {
+    Capacitor?: { isNativePlatform?: () => boolean }
+    __mkForceMobile?: boolean
+  }
+  if (w.__mkForceMobile === true) return true
+  if (w.__mkForceMobile === false) return false
+  return !!w.Capacitor?.isNativePlatform?.()
+}

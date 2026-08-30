@@ -3,7 +3,8 @@ import { useUi } from '@/stores/ui'
 import { useLibrary } from '@/stores/library'
 import { useReader } from '@/stores/reader'
 import { applyDirection, initI18n } from '@/i18n'
-import { AppShell, Toaster } from '@/components/layout/Chrome'
+import { cn, isMobilePlatform } from '@/lib/utils'
+import { AppShell, Toaster, BottomTabs } from '@/components/layout/Chrome'
 import { WhatsNewDialog } from '@/components/layout/WhatsNew'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { LibraryPage } from '@/pages/LibraryPage'
@@ -106,16 +107,25 @@ export default function App() {
   }, [])
 
   const page = ui.page
+  // الجوال: الشريط الجانبي يستهلك ثلث الشاشة — نستبدله بتبويبات سفلية
+  const mobile = isMobilePlatform()
 
   return (
     <AppShell>
-      {!useReaderHidesSidebar(page) && <Sidebar />}
-      <main className="relative flex h-full min-w-0 flex-1 flex-col">
+      {!mobile && !useReaderHidesSidebar(page) && <Sidebar />}
+      <main
+        className={cn(
+          'relative flex h-full min-w-0 flex-1 flex-col',
+          // مساحة للتبويبات السفلية على الجوال (القارئ ملء شاشة بلا تبويبات)
+          mobile && page !== 'reader' && 'pb-[62px]'
+        )}
+      >
         {page === 'library' && <LibraryPage />}
         {page === 'stats' && <StatsPage />}
         {page === 'settings' && <SettingsPage />}
         {page === 'reader' && <ReaderPage />}
       </main>
+      {mobile && page !== 'reader' && <BottomTabs />}
       <Toaster />
       <WhatsNewDialog />
       {ui.dropOverlay && (

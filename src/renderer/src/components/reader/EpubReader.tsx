@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import ePub, { type Book as EpubBook, type Rendition, type Contents, type NavItem } from 'epubjs'
 import type { Book } from '../../../../shared/types'
 import { useReader, type ReaderSettings } from '@/stores/reader'
-import { clamp, isRtlLang } from '@/lib/utils'
+import { clamp, isMobilePlatform, isRtlLang } from '@/lib/utils'
 import { searchEpub, collectSectionChunks, type EpubSearchMatch, type TtsChunk } from '@/lib/epubSearch'
 
 export interface TocEntry {
@@ -331,6 +331,8 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
           allowScriptedContent: false
         } as Parameters<EpubBook['renderTo']>[1])
         renditionRef.current = rel
+        // خطاف تشخيصي (يستخدمه الاختبار أيضًا)
+        ;(window as unknown as { __epubRendition?: Rendition }).__epubRendition = rel
         registerThemeHook(rel)
         applyAllThemes(rel, settings)
 
@@ -350,6 +352,7 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
                 keyNav(e.key)
               }
             })
+            doc.addEventListener('click', (e) => onTapZoneInFrame(e as MouseEvent, doc))
           } catch {
             /* ignore */
           }
@@ -792,6 +795,51 @@ export function EpubReader({ book, settings, resumeCfi, onDocReady, onRelocate }
 
   // ---------- سحب باللمس لقلب الصفحات (وضع الصفحات فقط) ----------
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
+  // ---------- مناطق لمس الجوال (تعمل داخل iframe الكتاب): الأطراف تقلب، الوسط يبدل الوضع الغامر ----------
+  const onTapZoneInFrame = useCallback((e: MouseEvent, doc: Document): void => {
+    try {
+      const w = window as unknown as { __mkForceTapZones?: boolean; __mkTapLog?: unknown[] }
+      if (!isMobilePlatform() && !w.__mkForceTapZones) return
+      const sel = doc.getSelection?.()
+      if (sel && !sel.isCollapsed) return
+      const width = doc.defaultView?.innerWidth ?? 0
+      if (width <= 0) return
+      const rx = e.clientX / width
+      const rtl = rtlRef.current
+      const log = (acted: string): void => {
+        try {
+          w.__mkTapLog = w.__mkTapLog || []
+          w.__mkTapLog.push({ rx: Math.round(rx * 100) / 100, rtl, acted })
+        } catch { /* ignore */ }
+      }
+      if (rx >= 0.76) {
+        // الحافة اليمنى: كتب عربية = السابق، أخرى = التالي
+        if (rtl) {
+          log('prev')
+          prevRef.current()
+        } else {
+          log('next')
+          nextRef.current()
+        }
+      } else if (rx <= 0.24) {
+        if (rtl) {
+          log('next')
+          nextRef.current()
+        } else {
+          log('prev')
+          prevRef.current()
+        }
+      } else {
+        // الوسط: إخفاء/إظهار الأشرطة (وضع غامر)
+        log('zen')
+        const st = useReader.getState()
+        st.setZen(!st.zenMode)
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   const onTouchStart = useCallback((e: React.TouchEvent): void => {
     if (flowRef.current !== 'paginated') return
     const t = e.touches[0]

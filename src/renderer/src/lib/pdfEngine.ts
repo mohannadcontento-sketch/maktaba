@@ -181,3 +181,22 @@ export async function extractPageText(
   }
   return out
 }
+
+/** واجهة محرك PDF المشتركة — يحققها PdfViewer (عارض موزيلا الرسمي) */
+export interface PdfHandle {
+  goToPage(n: number): void
+  nextPage(): void
+  prevPage(): void
+  zoomIn(): void
+  zoomOut(): void
+  setFitWidth(): void
+  setFitPage(): void
+  rotate(): void
+  runSearch(q: string): Promise<void>
+  currentPage(): number
+  numPages(): number
+  scrollToPercent(p: number, smooth?: boolean): void
+  percent(): number
+  /** نص صفحة للقراءة الصوتية (النسخة 2) */
+  pageText(page: number): Promise<string>
+}

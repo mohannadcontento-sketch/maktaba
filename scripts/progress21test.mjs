@@ -111,69 +111,45 @@ async function main() {
     const epubBook = imported.find((b) => b.format === 'epub') ?? (lib ?? []).find((b) => b.format === 'epub')
     report('pdf sample in library', !!pdfBook)
 
-    // ---------- فتح PDF ----------
+    // ---------- فتح PDF (عارض موزيلا الرسمي v2.4) ----------
     await evaljs(`(() => {
       const cards = [...document.querySelectorAll('.cursor-pointer.rounded-2xl')]
       const card = cards.find((c) => [...c.querySelectorAll('span')].some((s) => s.textContent === 'PDF'))
       card?.click()
       return true
     })()`)
-    await sleep(3500)
-
-    const total = await evaljs('document.querySelectorAll("[data-pdf-page]").length')
-    report('pdf pages rendered', total > 0, `total=${total}`)
-
-    // ---------- 1) اتساق الشريط مع موضع القراءة ----------
-    async function centerPage(p) {
-      await evaljs(`(() => {
-        const els = [...document.querySelectorAll('[data-pdf-page]')]
-        const el = els[${p} - 1]
-        const container = els[0]?.parentElement?.parentElement
-        if (el && container) {
-          container.scrollTop = el.offsetTop - (container.clientHeight - el.clientHeight) / 2
-        }
-        return true
-      })()`)
-      await sleep(1400) // معالج scroll + تأخير الحفظ 800ms
+    let viewerReady = false
+    for (let i = 0; i < 40; i++) {
+      await sleep(300)
+      viewerReady = await evaljs(`(() => {
+        const f = document.querySelector('iframe[src*="pdfjs"]')
+        return !!(f && f.contentWindow?.__pdfViewerApp?.pdfDocument)
+      })()`).catch(() => false)
+      if (viewerReady) break
     }
-    const probe = Math.max(2, Math.floor(total / 2))
-    await centerPage(probe)
-    const barNow = await evaljs('Number(document.querySelector(\'input[type="range"]\')?.value ?? -1)')
-    const expected = (probe / total) * 100
-    const tol = 100 / total / 2 + 2
-    report('bar tracks scroll position (page-based)', Math.abs(barNow - expected) <= tol,
-      `bar=${barNow.toFixed(1)} expected=${expected.toFixed(1)} tol=${tol.toFixed(1)}`)
+    const total = viewerReady
+      ? await evaljs(`document.querySelector('iframe[src*="pdfjs"]').contentWindow.__pdfViewerApp.pdfDocument.numPages`)
+      : 0
+    report('pdf pages in official viewer', total > 0, `total=${total}`)
 
-    // ---------- 2) الحفظ بنفس مقياس الشريط ----------
+    // ---------- 1) قفزة صفحة → حفظ التقدم بنفس المقياس (نسبة الصفحات) ----------
+    const probe = Math.max(2, Math.floor(total / 2))
+    await evaljs(`(() => {
+      const f = document.querySelector('iframe[src*="pdfjs"]')
+      f.contentWindow.__pdfViewerApp.pdfViewer.currentPageNumber = ${probe}
+      return true
+    })()`)
+    await sleep(1400) // حدث pagechanging + تأخير الحفظ
     const saved = await evaljs(`(async () => {
       const b = await window.api.getBook(${JSON.stringify(pdfBook.id)})
       return { progress: b?.progress ?? -1, last: b?.lastLocation ?? '' }
     })()`)
-    report('saved progress matches bar scale', Math.abs(saved.progress - barNow) <= tol,
-      `saved=${saved.progress.toFixed(1)} bar=${barNow.toFixed(1)} last=${saved.last}`)
+    const expected = (probe / total) * 100
+    const tol = 100 / total / 2 + 2
+    report('page jump saves page-based progress', Math.abs(saved.progress - expected) <= tol,
+      `saved=${saved.progress.toFixed(1)} expected=${expected.toFixed(1)} last=${saved.last}`)
 
-    // ---------- 3) المنزلق يقفز إلى الصفحة الصحيحة ----------
-    await evaljs(`(() => {
-      const range = document.querySelector('input[type="range"]')
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-      setter.call(range, 50)
-      range.dispatchEvent(new Event('input', { bubbles: true }))
-      range.dispatchEvent(new Event('change', { bubbles: true }))
-      return true
-    })()`)
-    await sleep(1500)
-    const afterSlider = await evaljs(`(() => {
-      const els = [...document.querySelectorAll('[data-pdf-page]')]
-      const container = els[0]?.parentElement?.parentElement
-      const center = container ? container.scrollTop + container.clientHeight / 2 : 0
-      let p = 1
-      els.forEach((el, i) => { if (el.offsetTop <= center) p = i + 1 })
-      return { p, bar: Number(document.querySelector('input[type="range"]')?.value ?? -1) }
-    })()`)
-    report('slider 50% lands near middle page', Math.abs(afterSlider.p - total / 2) <= 1,
-      `page=${afterSlider.p}/${total} bar=${afterSlider.bar}`)
-
-    // ---------- 4) الاستعادة: إغلاق وفتح — الشريط لا يقفز ----------
+    // ---------- 2) الاستعادة: إغلاق وفتح — يعود لنفس الصفحة بلا قفزة ----------
     await evaljs(`(() => { document.querySelector('header button')?.click(); return true })()`)
     await sleep(1000)
     await evaljs(`(() => {
@@ -182,11 +158,20 @@ async function main() {
       card?.click()
       return true
     })()`)
-    await sleep(4000)
-    const afterReopen = await evaljs('Number(document.querySelector(\'input[type="range"]\')?.value ?? -1)')
+    let restored = -1
+    for (let i = 0; i < 40; i++) {
+      await sleep(300)
+      restored = await evaljs(`(() => {
+        const f = document.querySelector('iframe[src*="pdfjs"]')
+        const app = f?.contentWindow?.__pdfViewerApp
+        return app?.pdfDocument ? app.pdfViewer.currentPageNumber : -1
+      })()`).catch(() => -1)
+      if (restored > 0) break
+    }
+    await sleep(1200)
     const reopenSaved = await evaljs(`(async () => (await window.api.getBook(${JSON.stringify(pdfBook.id)}))?.progress ?? -1)()`)
-    report('bar consistent after reopen (no jump)', Math.abs(afterReopen - reopenSaved) <= tol + 1,
-      `bar=${afterReopen.toFixed(1)} saved=${reopenSaved.toFixed(1)}`)
+    report('reopen restores same page (no jump)', Math.abs(restored - probe) <= 1 && Math.abs(reopenSaved - expected) <= tol + 1,
+      `page=${restored}/${total} saved=${reopenSaved.toFixed(1)}`)
 
     await evaljs(`(() => { document.querySelector('header button')?.click(); return true })()`)
     await sleep(800)

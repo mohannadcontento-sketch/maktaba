@@ -69,6 +69,34 @@ async function boot(): Promise<void> {
     })
     setTimeout(() => guard?.done(), 800)
   })
+
+  // زر الرجوع الفيزيائي على الجوال: يغلق القارئ/يرجع للمكتبة بدل الخروج من التطبيق
+  if (cap?.isNativePlatform?.()) {
+    void (async () => {
+      try {
+        const { App: CapApp } = await import('@capacitor/app')
+        await CapApp.addListener('backButton', () => {
+          void (async () => {
+            const { useUi } = await import('./stores/ui')
+            const uist = useUi.getState()
+            if (uist.page === 'reader') {
+              const { useReader } = await import('./stores/reader')
+              useReader.getState().close()
+              uist.setPage('library')
+              const { useLibrary } = await import('./stores/library')
+              await useLibrary.getState().load()
+            } else if (uist.page !== 'library') {
+              uist.setPage('library')
+            } else {
+              void CapApp.exitApp()
+            }
+          })()
+        })
+      } catch (e) {
+        console.warn('back-button plugin unavailable', e)
+      }
+    })()
+  }
 }
 
 void boot().catch((e) => {

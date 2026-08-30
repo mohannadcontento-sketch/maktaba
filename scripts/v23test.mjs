@@ -92,64 +92,80 @@ async function main() {
     report('boot splash removed after render (no black screen)', bootState.guardGone === true, JSON.stringify(bootState))
     report('polyfills active (Object.hasOwn)', bootState.hasHasOwn === true)
 
-    // 2) شريط أدوات PDF السفلي — افتح الكتاب
+    // 2) عارض موزيلا الرسمي (v2.4) — افتح الكتاب
     await openCard('PDF')
-    await sleep(4000)
+    let viewerReady = false
+    for (let i = 0; i < 40; i++) {
+      await sleep(300)
+      viewerReady = await evaljs(`(() => {
+        const f = document.querySelector('iframe[src*="pdfjs"]')
+        return !!(f && f.contentWindow?.__pdfViewerApp?.pdfDocument)
+      })()`).catch(() => false)
+      if (viewerReady) break
+    }
+    report('pdf official mozilla viewer opens document', !!viewerReady)
+
     const bar1 = await evaljs(`(() => {
-      const pageInput = document.querySelector('input[title*="رقم الصفحة"]')
-      const slider = [...document.querySelectorAll('input[type="range"]')].pop()
+      const f = document.querySelector('iframe[src*="pdfjs"]')
+      const d = f.contentDocument
+      const app = f.contentWindow.__pdfViewerApp
       return {
-        hasInput: !!pageInput,
-        page: pageInput?.placeholder ?? null,
-        slider: !!slider,
-        total: pageInput?.parentElement?.textContent?.match(/\\/(\\s*)(\\d+)/)?.[2] ?? null,
-        zoom: [...document.querySelectorAll('button')].find((b) => b.title === 'إرجاع التكبير إلى 100%')?.textContent ?? null
+        toolbar: !!d.getElementById('toolbarContainer'),
+        pageInput: !!d.getElementById('pageNumber'),
+        numPages: app.pdfDocument.numPages,
+        dark: !!d.querySelector('style[data-mk-viewer]'),
+        page: app.pdfViewer.currentPageNumber
       }
     })()`)
-    report('pdf acrobat toolbar exists (page input + progress + zoom)', bar1.hasInput && bar1.slider && bar1.zoom !== null, JSON.stringify(bar1))
+    report('pdf viewer toolbar (page input + dark chrome + 8 pages)', bar1.toolbar && bar1.pageInput && bar1.numPages === 8 && bar1.dark, JSON.stringify(bar1))
 
     // التالي → الصفحة 2
-    await evaljs(`(() => { document.querySelector('button[title="الصفحة التالية"]')?.click(); return 1 })()`)
-    await sleep(1100)
-    const afterNext = await evaljs(`(() => document.querySelector('input[title*="رقم الصفحة"]')?.placeholder ?? null)()`)
-    report('pdf next-page button advances to page 2', afterNext === '2', `placeholder=${afterNext}`)
-
-    // قفزة إلى الصفحة 1 عبر الإدخال
     await evaljs(`(() => {
-      const inp = document.querySelector('input[title*="رقم الصفحة"]')
-      if (!inp) return 0
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
-      inp.focus()
-      setter.call(inp, '1')
-      inp.dispatchEvent(new Event('input', { bubbles: true }))
-      inp.blur()
+      document.querySelector('iframe[src*="pdfjs"]').contentDocument.getElementById('next')?.click()
       return 1
     })()`)
     await sleep(1100)
-    const afterJump = await evaljs(`(() => document.querySelector('input[title*="رقم الصفحة"]')?.placeholder ?? null)()`)
-    report('pdf page-number jump works', afterJump === '1', `placeholder=${afterJump}`)
+    const afterNext = await evaljs(`(() => document.querySelector('iframe[src*="pdfjs"]').contentWindow.__pdfViewerApp.pdfViewer.currentPageNumber)()`)
+    report('pdf next button advances to page 2', afterNext === 2, `page=${afterNext}`)
 
-    // التكبير: نسبة مطلقة من الحجم الأصلي — +10% على الفعلي
-    const zoomBefore = await evaljs(`(() => [...document.querySelectorAll('button')].find((b) => b.title === 'إرجاع التكبير إلى 100%')?.textContent ?? null)()`)
-    await evaljs(`(() => { document.querySelector('button[title="تكبير القراءة"]')?.click(); return 1 })()`)
-    await sleep(700)
-    const zoomAfter = await evaljs(`(() => [...document.querySelectorAll('button')].find((b) => b.title === 'إرجاع التكبير إلى 100%')?.textContent ?? null)()`)
-    report('pdf zoom +10% from effective scale', !!zoomBefore && !!zoomAfter && zoomBefore !== zoomAfter, `${zoomBefore} → ${zoomAfter}`)
-
-    // 3) المصغرات
+    // قفزة إلى الصفحة 1 عبر إدخال العارض الرسمي
     await evaljs(`(() => {
-      const btn = [...document.querySelectorAll('header button')].find((b) => b.title === 'المصغرات')
-      btn?.click()
+      const d = document.querySelector('iframe[src*="pdfjs"]').contentDocument
+      const inp = d.getElementById('pageNumber')
+      const setter = Object.getOwnPropertyDescriptor(d.defaultView.HTMLInputElement.prototype, 'value').set
+      inp.focus()
+      setter.call(inp, '1')
+      inp.dispatchEvent(new d.defaultView.Event('input', { bubbles: true }))
+      inp.dispatchEvent(new d.defaultView.Event('change', { bubbles: true }))
+      return 1
+    })()`)
+    await sleep(1100)
+    const afterJump = await evaljs(`(() => document.querySelector('iframe[src*="pdfjs"]').contentWindow.__pdfViewerApp.pdfViewer.currentPageNumber)()`)
+    report('pdf page-number jump works', afterJump === 1, `page=${afterJump}`)
+
+    // التكبير عبر زر العارض الرسمي
+    const zoomBefore = await evaljs(`(() => document.querySelector('iframe[src*="pdfjs"]').contentWindow.__pdfViewerApp.pdfViewer.currentScale)()`)
+    await evaljs(`(() => { document.querySelector('iframe[src*="pdfjs"]').contentDocument.getElementById('zoomInButton')?.click(); return 1 })()`)
+    await sleep(700)
+    const zoomAfter = await evaljs(`(() => document.querySelector('iframe[src*="pdfjs"]').contentWindow.__pdfViewerApp.pdfViewer.currentScale)()`)
+    report('pdf viewer zoom-in raises scale', !!zoomBefore && !!zoomAfter && zoomAfter > zoomBefore, `${zoomBefore} → ${zoomAfter}`)
+
+    // 3) المصغرات الرسمية
+    await evaljs(`(() => {
+      document.querySelector('iframe[src*="pdfjs"]').contentDocument.getElementById('sidebarToggleButton')?.click()
       return 1
     })()`)
     let thumbs = 0
     for (let i = 0; i < 12; i++) {
       await sleep(700)
-      thumbs = await evaljs(`(() => document.querySelectorAll('aside img').length)()`)
+      thumbs = await evaljs(`(() => {
+        const d = document.querySelector('iframe[src*="pdfjs"]').contentDocument
+        return d.querySelectorAll('#thumbnailView img, #thumbnailView canvas').length
+      })()`)
       if (thumbs > 0) break
     }
-    report('pdf thumbnails grid renders', thumbs > 0, `imgs=${thumbs}`)
-    await evaljs(`(() => { [...document.querySelectorAll('header button')].find((b) => b.title === 'المصغرات')?.click(); return 1 })()`)
+    report('pdf viewer thumbnails render', thumbs > 0, `thumbs=${thumbs}`)
+    await evaljs(`(() => { document.querySelector('iframe[src*="pdfjs"]').contentDocument.getElementById('sidebarToggleButton')?.click(); return 1 })()`)
     await sleep(300)
     await goBack()
     await sleep(1200)
