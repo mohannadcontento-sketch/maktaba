@@ -2,7 +2,10 @@
  * bootGuard — حارس الإقلاع (سكربت عادي قبل وحدات ES)
  * يعمل في كل المنصات:
  *  - يرسم شاشة بداية فورية بدل الشاشة السوداء
- *  - يلتقط أي خطأ JS/CSP ويعرضه على الشاشة بدل صمت تام (تشخيص الجوال)
+ *  - أثناء الإقلاع فقط: يلتقط أي خطأ JS/CSP قاتل ويعرضه على الشاشة بدل صمت تام
+ *  - بعد نجاح الإقلاع: الأخطاء تُسجَّل في الكونسول فقط — التطبيق يعمل والبطاقات
+ *    القاتلة لا تفرض نفسها على المستخدم (أخطاء ResizeObserver الحميدة تُتجاهل دائمًا)
+ *  - حجب CSP للصور/الأنماط/الخطوط تجميلي ولا يُعتبر فشلًا أبدًا
  *  - يوفر window.__mkBoot (stage/done/fail) لتتبع مراحل الإقلاع
  */
 ;(function () {
@@ -10,9 +13,12 @@
   try {
     var stages = []
     var failed = false
+    var bootDone = false
     var root = null
     var stageEl = null
     var spinEl = null
+    var seenViolations = {}
+    var runtimeErrors = []
 
     function ensureDom() {
       if (root && root.isConnected) return root
@@ -95,21 +101,55 @@
       }
     }
 
+    // أخطاء حميدة معروفة من كروميوم — لا تستحق إيقاف التطبيق إطلاقًا
+    function isBenignErr(msg) {
+      return typeof msg === 'string' && /ResizeObserver loop/i.test(msg)
+    }
+
+    // بعد نجاح الإقلاع: الأخطاء تُسجَّل للفحص عن بُعد (chrome://inspect) دون مقاطعة المستخدم
+    function recordRuntimeError(text) {
+      try {
+        runtimeErrors.push(String(text || '').slice(0, 500))
+        if (runtimeErrors.length > 12) runtimeErrors.shift()
+        window.__mkRuntimeErrors = runtimeErrors
+        console.error('[maktaba]', text)
+      } catch (_) {}
+    }
+
     window.onerror = function (msg, src, line, col, err) {
+      if (isBenignErr(msg)) return
+      if (bootDone) {
+        recordRuntimeError(fmtErr(err) || msg + ' @ ' + (src || '') + ':' + line + ':' + col)
+        return
+      }
       if (failed) return
       showFatal('حدث خطأ أثناء تشغيل التطبيق', fmtErr(err) || msg + ' @ ' + (src || '') + ':' + line + ':' + col)
     }
     window.addEventListener('unhandledrejection', function (ev) {
+      var text = fmtErr(ev && ev.reason)
+      if (isBenignErr(text)) return
+      if (bootDone) {
+        recordRuntimeError(text)
+        return
+      }
       if (failed) return
-      showFatal('حدث خطأ أثناء تشغيل التطبيق', fmtErr(ev && ev.reason))
+      showFatal('حدث خطأ أثناء تشغيل التطبيق', text)
     })
     window.addEventListener('securitypolicyviolation', function (ev) {
-      if (failed) return
-      showFatal(
-        'حجب سياسة الأمان (CSP) لمورد',
-        (ev && (ev.violatedDirective || ev.effectiveDirective) + ' → ' + (ev.blockedURI || '') + '\n' + (ev.sourceFile || '') + ':' + (ev.lineNumber || 0)) ||
-          'CSP violation'
-      )
+      var d = (ev && (ev.violatedDirective || ev.effectiveDirective)) || '?'
+      var u = (ev && ev.blockedURI) || ''
+      var key = d + '|' + u
+      if (seenViolations[key]) return
+      seenViolations[key] = 1
+      var detail = d + ' → ' + u + '\n' + ((ev && ev.sourceFile) || '') + ':' + ((ev && ev.lineNumber) || 0)
+      try {
+        console.warn('[maktaba][CSP]', detail)
+      } catch (_) {}
+      // حجب الصور/الأنماط/الخطوط/الاتصالات تجميلي — لا يعطّل التطبيق،
+      // وبعد نجاح الإقلاع لا شيء من CSP يرسم بطاقة قاتلة أصلًا
+      var fatal = d === 'script-src' || d === 'script-src-elem' || d === 'worker-src' || d === 'default-src'
+      if (bootDone || failed || !fatal) return
+      showFatal('حجب سياسة الأمان (CSP) لمورد', detail)
     })
 
     window.__mkBoot = {
@@ -120,6 +160,7 @@
         if (stageEl) stageEl.textContent = name
       },
       done: function () {
+        bootDone = true
         if (failed || !root) return
         var r = root
         r.style.opacity = '0'
