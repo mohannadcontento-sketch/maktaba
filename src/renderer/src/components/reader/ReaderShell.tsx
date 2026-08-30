@@ -127,7 +127,8 @@ export function ReaderShell({ book }: { book: Book }) {
     setCurrentPage(p)
     const real = engine.pdf?.percent()
     if (real != null) setPercent(real)
-    else setPercent(((p - 1) / Math.max(1, engine.pdf?.numPages() ?? 1)) * 100)
+    // الاحتياطي بنفس مقياس الصفحات (لا مقياس التمرير) حتى لا يقفز الشريط
+    else setPercent(Math.min(100, (p / Math.max(1, engine.pdf?.numPages() ?? 1)) * 100))
   }, [engine])
 
   const onEpubRelocate = useCallback((pct: number, cfi: string): void => {

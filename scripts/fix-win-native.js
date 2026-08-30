@@ -21,6 +21,26 @@ const repo = path.resolve(__dirname, '..')
 const pkg = require(path.join(repo, 'package.json'))
 const electronVersion = require(path.join(repo, 'node_modules/electron/package.json')).version
 
+// وضع الاستعادة: إرجاع نسخة لينكس (بعد بناء ويندوز كي تعمل اختبارات dev على لينكس)
+if (process.argv.includes('--restore-linux')) {
+  const modDir = path.join(repo, 'node_modules/better-sqlite3')
+  console.log('↻ استعادة نسخة لينكس من better-sqlite3 (electron ABI)')
+  const args = ['--runtime', 'electron', '--target', electronVersion, '--platform', 'linux', '--arch', 'x64']
+  const localBin = path.join(modDir, 'node_modules', 'prebuild-install', 'bin.js')
+  try {
+    if (fs.existsSync(localBin)) {
+      execFileSync(process.execPath, [localBin, ...args], { cwd: modDir, stdio: 'inherit' })
+    } else {
+      execFileSync('npx', ['--yes', 'prebuild-install', ...args], { cwd: modDir, stdio: 'inherit', shell: true })
+    }
+  } catch (e) {
+    console.error('✗ فشل الاستعادة:', e.message)
+    process.exit(1)
+  }
+  console.log('✓ أُعيدت نسخة لينكس — اختبارات dev تعمل من جديد')
+  process.exit(0)
+}
+
 const targets = [
   {
     name: 'better-sqlite3',

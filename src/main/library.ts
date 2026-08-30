@@ -162,6 +162,12 @@ async function importOne(filePath: string): Promise<ImportResult> {
         patch.coverPath = coverFile
       }
       if (Object.keys(patch).length) updateBook(id, patch)
+      // آلية الأغلفة المحسّنة: إن لم يوجد غلاف مدمج نجلبه تلقائيًا من الويب بالخلفية
+      if (!patch.coverPath) {
+        const finalTitle = (patch.title as string) ?? cleanTitleFromFileName(filePath)
+        const finalAuthor = (patch.author as string) ?? undefined
+        queueAutoCover(id, finalTitle, finalAuthor)
+      }
     } catch {
       // بيانات وصفية غير حرجة
     }
@@ -223,74 +229,40 @@ export function removeBookFiles(fileName: string, coverPath: string | null): voi
   void deleteBookRow
 }
 
-/**
- * البحث عن غلاف للكتاب من مصادر الويب (Google Books ثم Open Library)
- * يُرجع رابط صورة الغلاف الأفضل أو null
- */
-export async function searchCoverUrl(title: string, author?: string | null): Promise<string | null> {
-  const q = [title, author].filter(Boolean).join(' ').trim()
-  if (!q) return null
+// ============================================================
+// آلية البحث عن الأغلفة من الويب — النسخة المحسّنة (2.1)
+// ============================================================
+// تحسينات على الآلية القديمة:
+//  1) استعلامات متعددة مرتبة: (عنوان + مؤلف) ثم (عنوان) ثم (أول 5 كلمات) —
+//     مع تنظيف التشكيل والرموز والسنوات والامتدادات القادمة من أسماء الملفات
+//  2) المصادر تعمل بالتوازي (Google Books + Open Library) بدل التسلسل البطيء
+//  3) ترشيح النتائج بتسجيل نقاط: تطابق العنوان + تطابق المؤلف — لا نأخذ «أول نتيجة» أعمى
+//  4) التحقق من الصورة الفعلية: قراءة الأبعاد من ترويسة JPEG/PNG ورفض الفارغة 1×1
+//     والصغيرة جدًا وغير النسبية — إن فشل مرشح جُرّب التالي تلقائيًا
+//  5) احتياطيات التنزيل: zoom=3→2→1 لجوجل، L→M لمكتبة مفتوحة (مع default=false
+//     لإرجاع 404 بدل صورة 1×1 الفارغة عند غياب الغلاف)
+//  6) ذاكرة سلبية 10 دقائق: الكتاب الذي فشل جلب غلافه لا يُعاد البحث عنه فورًا مجددًا
+//  7) جلب تلقائي متسلسل بعد استيراد EPUB بلا غلاف مدمج (طابور لا يغرق الشبكة)
 
-  // 1) Google Books
-  try {
-    const gb = await fetchJson(
-      `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8`,
-      12000
-    )
-    const items: unknown[] = (gb as { items?: unknown[] })?.items ?? []
-    let fallbackLink: string | null = null
-    for (const it of items) {
-      const vi = (it as {
-        volumeInfo?: {
-          imageLinks?: Record<string, string>
-          title?: string
-          authors?: string[]
-        }
-      }).volumeInfo
-      if (!vi) continue
-      const link =
-        vi.imageLinks?.extraLarge ||
-        vi.imageLinks?.large ||
-        vi.imageLinks?.medium ||
-        vi.imageLinks?.thumbnail ||
-        vi.imageLinks?.smallThumbnail
-      if (!link) continue
-      // تفضيل تطابق العنوان/المؤلف، وإلا خذ أول نتيجة ذات صورة
-      const titleOk = vi.title && norm(vi.title).includes(norm(title).slice(0, 12))
-      const authorOk = !author || vi.authors?.some((a) => norm(a).includes(norm(author).split(' ')[0]))
-      if (titleOk && authorOk) return upgradeGoogleImage(link)
-      if (!fallbackLink) fallbackLink = link
-    }
-    if (fallbackLink) return upgradeGoogleImage(fallbackLink)
-  } catch {
-    /* تجاهل والانتقال لـ Open Library */
-  }
-
-  // 2) Open Library (حسب العنوان ثم المؤلف)
-  try {
-    const ol = await fetchJson(
-      `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}${author ? `&author=${encodeURIComponent(author)}` : ''}&limit=8&fields=cover_i,title,author_name`,
-      12000
-    )
-    const docs: Array<{ cover_i?: number; title?: string; author_name?: string[] }> =
-      (ol as { docs?: Array<{ cover_i?: number }> })?.docs ?? []
-    const withCover = docs.filter((d) => d.cover_i && typeof d.cover_i === 'number')
-    if (withCover.length) {
-      // تفضيل التطابق في المؤلف إن وُجد
-      let best = withCover[0]
-      if (author) {
-        const a = norm(author).split(' ')[0]
-        const matched = withCover.find((d) => d.author_name?.some((x) => norm(x).includes(a)))
-        if (matched) best = matched
-      }
-      return `https://covers.openlibrary.org/b/id/${best.cover_i}-L.jpg`
-    }
-  } catch {
-    /* تجاهل */
-  }
-  return null
+interface CoverCandidate {
+  urls: string[] // بالترتيب: الأفضل أولًا ثم الاحتياطيات
+  score: number
+  source: 'google' | 'openlibrary'
 }
 
+/** تنظيف جزء من الاستعلام (عنوان/مؤلف) من مخلفات أسماء الملفات والتشكيل */
+function cleanQueryPart(s: string): string {
+  return s
+    .replace(/\.(pdf|epub|mobi|azw3?|cbz?|docx?)$/i, '')
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '') // تشكيل + تطويل
+    .replace(/[([{][^)\]}]*[)\]}]/g, ' ') // ما بين الأقواس (نسخة/جودة/سنة…)
+    .replace(/[_\-–—|,.:;!?'"«»/\\]+/g, ' ')
+    .replace(/\b(19|20)\d{2}\b/g, ' ') // سنوات مستقلة
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** تطبيع عربي/لاتيني أساسي للمقارنة (إزالة التشكيل وتوحيد الهمزات) */
 function norm(s: string): string {
   return s
     .replace(/[\u064B-\u065F\u0670]/g, '')
@@ -301,34 +273,241 @@ function norm(s: string): string {
     .trim()
 }
 
-/** رفع دقة صورة Google Books إلى أكبر مقاس متاح */
-function upgradeGoogleImage(link: string): string {
-  return link
-    .replace('http://', 'https://')
-    .replace('&edge=curl', '')
-    .replace('zoom=1', 'zoom=3')
+/** كلمات مطبعة للمقارنة (تجاهل كلمة الحرف الواحدة) */
+function tokens(s: string): Set<string> {
+  return new Set(norm(s).split(/\s+/).filter((w) => w.length > 1))
 }
 
-/** تنزيل صورة من رابط إلى Buffer */
+/** درجة تغطية عنوان النتيجة لعنوان الكتاب المطلوب (0..1) */
+function titleSimilarity(want: string, got: string | undefined): number {
+  if (!got) return 0
+  const A = tokens(want)
+  const B = tokens(got)
+  if (!A.size || !B.size) return 0
+  let inter = 0
+  for (const t of A) if (B.has(t)) inter++
+  return inter / Math.min(A.size, B.size)
+}
+
+/** نقاط النتيجة: تطابق العنوان 0.7 + تطابق المؤلف 0.3 */
+function scoreResult(
+  wantTitle: string,
+  wantAuthor: string | null | undefined,
+  gotTitle?: string,
+  gotAuthors?: string[]
+): number {
+  let s = titleSimilarity(wantTitle, gotTitle) * 0.7
+  if (wantAuthor && gotAuthors?.length) {
+    const wa = tokens(wantAuthor)
+    let hit = false
+    for (const ra of gotAuthors) {
+      const rb = tokens(ra)
+      for (const t of wa) if (rb.has(t)) hit = true
+    }
+    if (hit) s += 0.3
+  }
+  return s
+}
+
+/** استعلامات مرشحة بالترتيب (بدون تكرار) */
+function buildQueries(title: string, author?: string | null): string[] {
+  const t = cleanQueryPart(title)
+  const a = author ? cleanQueryPart(author) : ''
+  const list: string[] = []
+  if (t && a) list.push(`${t} ${a}`)
+  if (t) list.push(t)
+  const shortT = t.split(/\s+/).slice(0, 5).join(' ')
+  if (shortT && shortT !== t) list.push(shortT)
+  return [...new Set(list)].filter((q) => q.length >= 2).slice(0, 3)
+}
+
+/** رفع دقة صورة Google Books إلى أكبر مقاس متاح + توليد الاحتياطيات */
+function googleUrlVariants(link: string): string[] {
+  const base = link.replace('http://', 'https://').replace('&edge=curl', '')
+  const out: string[] = []
+  for (const zoom of ['3', '2', '1']) {
+    let u = base
+    if (/zoom=\d/.test(u)) u = u.replace(/zoom=\d/, `zoom=${zoom}`)
+    else u += `&zoom=${zoom}`
+    if (!out.includes(u)) out.push(u)
+  }
+  return out
+}
+
+/** جمع مرشحين من Google Books عبر الاستعلامات (نتوقف مبكرًا عند الوفرة) */
+async function collectGoogle(
+  queries: string[],
+  wantTitle: string,
+  wantAuthor: string | null | undefined
+): Promise<CoverCandidate[]> {
+  const out: CoverCandidate[] = []
+  for (const q of queries) {
+    try {
+      const gb = await fetchJson(
+        `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=10&printType=books`,
+        8000
+      )
+      const items: unknown[] = (gb as { items?: unknown[] })?.items ?? []
+      for (const it of items) {
+        const vi = (it as { volumeInfo?: { imageLinks?: Record<string, string>; title?: string; authors?: string[] } })
+          .volumeInfo
+        if (!vi) continue
+        const link =
+          vi.imageLinks?.extraLarge ||
+          vi.imageLinks?.large ||
+          vi.imageLinks?.medium ||
+          vi.imageLinks?.thumbnail ||
+          vi.imageLinks?.smallThumbnail
+        if (!link) continue
+        const score = scoreResult(wantTitle, wantAuthor, vi.title, vi.authors) + 0.05 // أفضلية مصدر بسيطة
+        out.push({ urls: googleUrlVariants(link), score, source: 'google' })
+      }
+      if (out.length >= 6) break
+    } catch {
+      /* المصدر تعذر على هذا الاستعلام — ننتقل للتالي */
+    }
+  }
+  return out
+}
+
+/** جمع مرشحين من Open Library (default=false يمنع الصور الفارغة) */
+async function collectOpenLibrary(
+  queries: string[],
+  wantTitle: string,
+  wantAuthor: string | null | undefined
+): Promise<CoverCandidate[]> {
+  const out: CoverCandidate[] = []
+  for (const q of queries) {
+    // openlibrary يفصل البحث: العنوان في حقل title والباقي (المؤلف) في author
+    const t = cleanQueryPart(q)
+    if (!t) continue
+    try {
+      const ol = await fetchJson(
+        `https://openlibrary.org/search.json?title=${encodeURIComponent(t)}&limit=8&fields=cover_i,title,author_name`,
+        8000
+      )
+      const docs: Array<{ cover_i?: number; title?: string; author_name?: string[] }> =
+        (ol as { docs?: Array<{ cover_i?: number; title?: string; author_name?: string[] }> })?.docs ?? []
+      for (const d of docs) {
+        if (!d.cover_i || typeof d.cover_i !== 'number') continue
+        const score = scoreResult(wantTitle, wantAuthor, d.title, d.author_name)
+        out.push({
+          urls: [
+            `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg?default=false`,
+            `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg?default=false`
+          ],
+          score,
+          source: 'openlibrary'
+        })
+      }
+      if (out.length >= 6) break
+    } catch {
+      /* المصدر تعذر — ننتقل للتالي */
+    }
+  }
+  return out
+}
+
+/**
+ * جمع أفضل مرشحي الأغلفة: تشغيل المصدرين بالتوازي ثم ترتيب تنازلي بالنقاط.
+ * نحتفظ بالمرشحين الجيدين (score ≥ 0.35) وإن لم يوجد أيٌّها نأخذ أعلى نتيجتين على أي حال.
+ * ميزانية زمنية إجمالية (18 ثانية) حتى لا يعلق البحث على شبكة بطيئة أو مصدر عالق.
+ */
+const COVER_SEARCH_BUDGET_MS = 18000
+
+function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error('cover search budget exceeded')), ms))
+  ])
+}
+
+async function collectCoverCandidates(title: string, author?: string | null): Promise<CoverCandidate[]> {
+  const queries = buildQueries(title, author)
+  if (!queries.length) return []
+  const wantTitle = cleanQueryPart(title)
+  const [gRes, oRes] = await Promise.allSettled([
+    withDeadline(collectGoogle(queries, wantTitle, author), COVER_SEARCH_BUDGET_MS),
+    withDeadline(collectOpenLibrary(queries, wantTitle, author), COVER_SEARCH_BUDGET_MS)
+  ])
+  const all = [...(gRes.status === 'fulfilled' ? gRes.value : []), ...(oRes.status === 'fulfilled' ? oRes.value : [])]
+  // إزالة التكرار حسب أول رابط مع الاحتفاظ بأعلى نقاط
+  const byUrl = new Map<string, CoverCandidate>()
+  for (const c of all) {
+    const key = c.urls[0]
+    const prev = byUrl.get(key)
+    if (!prev || c.score > prev.score) byUrl.set(key, c)
+  }
+  const sorted = [...byUrl.values()].sort((a, b) => b.score - a.score)
+  const good = sorted.filter((c) => c.score >= 0.35)
+  return good.length ? good : sorted.slice(0, 2)
+}
+
+/**
+ * قراءة أبعاد الصورة من الترويسة (PNG: IHDR، JPEG: علامات SOF) — دون فك ترميز كامل
+ */
+function imageDims(buf: Buffer): { w: number; h: number } | null {
+  try {
+    if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+      return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }
+    }
+    if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+      let off = 2
+      while (off + 9 < buf.length) {
+        if (buf[off] !== 0xff) {
+          off++
+          continue
+        }
+        const marker = buf[off + 1]
+        if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+          off += 2
+          continue
+        }
+        if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+          return { h: buf.readUInt16BE(off + 5), w: buf.readUInt16BE(off + 7) }
+        }
+        const len = buf.readUInt16BE(off + 2)
+        if (len < 2) return null
+        off += 2 + len
+      }
+    }
+  } catch {
+    /* ترويسة غير مفهومة */
+  }
+  return null
+}
+
+/** هل Buffer صورة غلاف مقبولة؟ (حجم + أبعاد + نسبة أبعاد معقولة) */
+function validCoverImage(buf: Buffer): boolean {
+  if (buf.length < 2000) return false
+  const d = imageDims(buf)
+  if (!d) return buf.length > 8000 // صيغة غير معروفة: نقبلها فقط إن كان حجمها معقولًا
+  if (d.w < 120 || d.h < 160) return false // أصغر من غلاف كتاب معقول
+  const r = d.w / d.h
+  return r > 0.25 && r < 3 // أغلفة الكتب قريبة من الطولي
+}
+
+/** تنزيل صورة من رابط إلى Buffer مع فحص نوع المحتوى */
 export async function downloadImage(url: string): Promise<Buffer | null> {
   try {
     const res = await net.fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 Maktaba/1.0' },
-      signal: AbortSignal.timeout(15000)
+      headers: { 'User-Agent': 'Mozilla/5.0 Maktaba/2.1' },
+      signal: AbortSignal.timeout(9000)
     })
     if (!res.ok) return null
+    const ctype = res.headers.get('content-type') ?? ''
+    if (ctype && !ctype.startsWith('image/')) return null
     const buf = Buffer.from(await res.arrayBuffer())
-    // openlibrary يرجع صورة 1×1 فارغة عند عدم وجود غلاف
-    if (buf.length < 800) return null
+    if (!validCoverImage(buf)) return null
     return buf
   } catch {
     return null
   }
 }
 
-async function fetchJson(url: string, timeoutMs = 12000): Promise<unknown> {
+async function fetchJson(url: string, timeoutMs = 8000): Promise<unknown> {
   const res = await net.fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 Maktaba/1.0' },
+    headers: { 'User-Agent': 'Mozilla/5.0 Maktaba/2.1' },
     signal: AbortSignal.timeout(timeoutMs)
   })
   if (!res.ok) throw new Error(`status ${res.status}`)
@@ -336,18 +515,103 @@ async function fetchJson(url: string, timeoutMs = 12000): Promise<unknown> {
 }
 
 /**
- * جلب أفضل غلاف للكتاب من الويب وحفظه في مجلد الأغلفة
- * يُرجع مسار الملف المحفوظ أو null
+ * البحث عن غلاف للكتاب من مصادر الويب — يُرجع رابط الصورة الأفضل أو null
  */
-export async function fetchAndSaveCover(bookId: string, title: string, author?: string | null): Promise<string | null> {
-  const url = await searchCoverUrl(title, author)
-  if (!url) return null
-  const buf = await downloadImage(url)
-  if (!buf) return null
-  const ext = buf[0] === 0x89 ? 'png' : 'jpg'
-  const file = path.join(coversDir(), `${bookId}.${ext}`)
-  fs.writeFileSync(file, buf)
-  updateBook(bookId, { coverPath: file })
-  return file
+export async function searchCoverUrl(title: string, author?: string | null): Promise<string | null> {
+  const candidates = await collectCoverCandidates(title, author)
+  const deadline = Date.now() + 15000
+  for (const c of candidates) {
+    for (const url of c.urls) {
+      if (Date.now() > deadline) return null
+      // تحقق سريع من قابلية التنزيل — أول رابط ناجح يُعاد
+      const buf = await downloadImage(url)
+      if (buf) return url
+    }
+  }
+  return null
 }
 
+/**
+ * جلب أفضل غلاف للكتاب من الويب وحفظه في مجلد الأغلفة
+ * يُرجع مسار الملف المحفوظ أو null — مع سلسلة مرشحين واحتياطيات وذاكرة سلبية
+ */
+const coverNegativeCache = new Map<string, number>()
+
+export async function fetchAndSaveCover(
+  bookId: string,
+  title: string,
+  author?: string | null
+): Promise<string | null> {
+  const key = `${norm(title)}|${norm(author ?? '')}`
+  const blockedUntil = coverNegativeCache.get(key) ?? 0
+  if (Date.now() < blockedUntil) return null
+
+  const candidates = await collectCoverCandidates(title, author)
+  const dlDeadline = Date.now() + 15000 // ميزانية التنزيل كاملة
+  for (const c of candidates.slice(0, 4)) {
+    for (const url of c.urls) {
+      if (Date.now() > dlDeadline) return null
+      const buf = await downloadImage(url)
+      if (!buf) continue
+      const ext = buf[0] === 0x89 ? 'png' : 'jpg'
+      const file = path.join(coversDir(), `${bookId}.${ext}`)
+      try {
+        fs.writeFileSync(file, buf)
+      } catch {
+        continue
+      }
+      coverNegativeCache.delete(key)
+      updateBook(bookId, { coverPath: file })
+      return file
+    }
+  }
+
+  // فشل: لا نكرر البحث لنفس الكتاب خلال 10 دقائق
+  coverNegativeCache.set(key, Date.now() + 10 * 60 * 1000)
+  return null
+}
+
+// ---------- الجلب التلقائي للأغلفة بعد الاستيراد (طابور متسلسل) ----------
+
+interface AutoCoverJob {
+  bookId: string
+  title: string
+  author?: string | null
+}
+
+const autoCoverQueue: AutoCoverJob[] = []
+let autoCoverRunning = false
+
+/** هل العنوان صالح للبحث؟ (نرفض أسماء ملفات عشوائية بلا كلمات حقيقية) */
+function searchableTitle(title: string): boolean {
+  const t = cleanQueryPart(title)
+  if (t.length < 3) return false
+  return /[A-Za-z\u0600-\u06FF]{2,}/.test(t)
+}
+
+/** إضافة كتاب لطابور الجلب التلقائي (يعمل في الخلفية ولا يعطّل الاستيراد) */
+export function queueAutoCover(bookId: string, title: string, author?: string | null): void {
+  if (!searchableTitle(title)) return
+  autoCoverQueue.push({ bookId, title, author })
+  void pumpAutoCover()
+}
+
+async function pumpAutoCover(): Promise<void> {
+  if (autoCoverRunning) return
+  autoCoverRunning = true
+  try {
+    while (autoCoverQueue.length) {
+      const job = autoCoverQueue.shift()
+      if (!job) break
+      try {
+        await fetchAndSaveCover(job.bookId, job.title, job.author)
+      } catch {
+        /* فشل غير حرج — نكمل البقية */
+      }
+      // مهلة قصيرة بين الطلبات أدبًا مع المصادر
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  } finally {
+    autoCoverRunning = false
+  }
+}

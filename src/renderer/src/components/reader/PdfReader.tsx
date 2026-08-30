@@ -83,6 +83,9 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
   const scaleRef = useRef(1)
   const curPageRef = useRef(1)
   const maxReachedRef = useRef(1)
+  // كتم حفظ التقدم حتى تكتمل استعادة الموضع المحفوظ — وإلا حُفظ موضع الصفحة 1 فور الفتح
+  const restoreDoneRef = useRef(true)
+  const resumeTargetRef = useRef(1)
 
   // ---------- المقياس ----------
   const computeScale = useCallback((): number => {
@@ -124,10 +127,12 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
     (n: number): void => {
       const el = containerRef.current
       if (!el || !offsets.current.length) return
-      const idx = clamp(n, 1, Math.max(1, numPages)) - 1
+      // numPagesRef لا numPages: التأثيرات ذات deps [] تلتقط النسخة الأولى من هذه الدالة،
+      // ولو استخدمنا حالة numPages لبقي clamp على 1 وأتت الاستعادة دائمًا للصفحة الأولى
+      const idx = clamp(n, 1, Math.max(1, numPagesRef.current)) - 1
       el.scrollTo({ top: Math.max(0, offsets.current[idx] - 14), behavior: 'smooth' })
     },
-    [numPages]
+    []
   )
 
   // ---------- رسم صفحة ----------
@@ -294,15 +299,17 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
             }
           },
           scrollToPercent: (p, smooth = true) => {
-            const el = containerRef.current
-            if (!el) return
-            const max = el.scrollHeight - el.clientHeight
-            el.scrollTo({ top: Math.max(0, (clamp(p, 0, 100) / 100) * max), behavior: smooth ? 'smooth' : 'auto' })
+            // تُفسَّر النسبة كنسبة من الصفحات (نفس مقياس الحفظ/الشريط) لا موضع التمرير —
+            // توحيد المقياس يمنع قفزات الشريط بعد السحب وعند إعادة الفتح
+            const total = Math.max(1, numPagesRef.current)
+            const target = clamp(Math.round((clamp(p, 0, 100) / 100) * total), 1, total)
+            scrollToPageInternal(target)
           },
           percent: () => {
-            const el = containerRef.current
-            if (!el || el.scrollHeight <= el.clientHeight) return 0
-            return clamp(((el.scrollTop + el.clientHeight / 2) / el.scrollHeight) * 100, 0, 100)
+            // نسبة الصفحة الحالية من الإجمالي — نفس مقياس الحفظ في saveProgress
+            // (المقياس القديم كان موضع التمرير/scrollHeight فيختلف عن المحفوظ ويبدو الشريط مكسورًا)
+            const p = currentScrollCenterPage() ?? curPageRef.current
+            return clamp((p / Math.max(1, numPagesRef.current)) * 100, 0, 100)
           }
         }
         onDocReady({ toc, handle })
@@ -311,10 +318,25 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
           book.lastLocation && /^\d+$/.test(book.lastLocation) ? parseInt(book.lastLocation) : 1
         setTimeout(() => requestRenderAround(resume), 50)
         if (resume > 1) {
-          setTimeout(() => {
-            scrollToPageInternal(resume)
-            ui.toast('استؤنفت القراءة من آخر موضع', 'info')
-          }, 300)
+          // استعادة حتى تجهز التخطيط — المحاولة كل 100ms حتى 4 ثوانٍ:
+          // الاعتماد على مهلة ثابتة (300ms) كان يتسبب في فشل صامت عند تأخر التخطيط
+          // فيبقى القارئ في الصفحة 1 بينما الشريط يقول موضعًا آخر
+          restoreDoneRef.current = false
+          resumeTargetRef.current = resume
+          const tryRestore = (attempt = 0): void => {
+            if (cancelled) return
+            const ready = offsets.current.length >= resume && (offsets.current[resume - 1] ?? 0) > 0
+            if (ready) {
+              scrollToPageInternal(resume)
+              ui.toast('استؤنفت القراءة من آخر موضع', 'info')
+              restoreDoneRef.current = true
+            } else if (attempt < 40) {
+              setTimeout(() => tryRestore(attempt + 1), 100)
+            } else {
+              restoreDoneRef.current = true
+            }
+          }
+          setTimeout(() => tryRestore(), 120)
         }
       } catch (e) {
         console.error('pdf load failed:', e, (e as Error)?.stack)
@@ -384,6 +406,13 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
   }
 
   // ---------- مراقبة التمرير ----------
+  // مرجع حي للمُستدعى — تأثير المستمع لا يعتمد على onPageChange،
+  // وبدلًا من ذلك نلتقط آخر نسخة عبر ref حتى لا يقفز الشريط
+  // لقيمة خاطئة من إغلاق قديم (stale closure) عندما لم يكن engine.pdf جاهزًا
+  const onPageChangeRef = useRef(onPageChange)
+  useEffect(() => {
+    onPageChangeRef.current = onPageChange
+  })
   useEffect(() => {
     const el = containerRef.current
     if (!el || !numPages) return
@@ -395,10 +424,12 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
         ticking = false
         const p = currentScrollCenterPage()
         if (p == null) return
+        // لو حرّك المستخدم نفسه لموضع غير هدف الاستعادة نفتح الحفظ فورًا
+        if (!restoreDoneRef.current && p !== resumeTargetRef.current) restoreDoneRef.current = true
         if (p !== curPageRef.current) {
           curPageRef.current = p
           maxReachedRef.current = Math.max(maxReachedRef.current, p)
-          onPageChange(p)
+          onPageChangeRef.current(p)
           requestRenderAround(p)
         }
         scheduleProgressSave(p)
@@ -411,6 +442,8 @@ export function PdfReader({ book, onDocReady, onPageChange }: Props) {
 
   const progressTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   function scheduleProgressSave(p: number): void {
+    // لا نحفظ قبل اكتمال الاستعادة (وإلا صار المحفوظ موضع الصفحة 1 المؤقت)
+    if (!restoreDoneRef.current) return
     clearTimeout(progressTimer.current)
     progressTimer.current = setTimeout(() => {
       // التقدم = الصفحة الحالية / إجمالي الصفحات (تصل 100% عند آخر صفحة)

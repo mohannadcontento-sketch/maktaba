@@ -21,6 +21,11 @@ function reportCrash(kind: string, err: unknown): void {
   try {
     fs.appendFileSync(crashLogPath(), `[${new Date().toISOString()}] ${kind}\n${msg}\n\n`)
   } catch { /* لا شيء — الأهم عرض الخطأ */ }
+  // في وضع الاختبار الآلي لا نعرض نافذة مشروطة (تحجب الخيط الرئيسي تحت Xvfb)
+  if (process.env.MAKTABA_TEST === '1') {
+    console.error('MAKTABA-CRASH:', kind, msg.slice(0, 800))
+    return
+  }
   try {
     dialog.showErrorBox(
       'خطأ غير متوقع في مكتبة / Unexpected error in Maktaba',
@@ -225,6 +230,47 @@ if (!gotLock) {
   app.on('window-all-closed', () => {
     app.quit()
   })
+
+  // ——— جسر اختبار (وضع التطوير فقط): أوامر JSON عبر stdin تُنفَّذ في الريندرر ———
+  // بديل موثوق لـ CDP/DevTools عندما تكون نقطة ws غير متاحة في بيئة الحاويات
+  if (!app.isPackaged && process.env.MAKTABA_TEST === '1') {
+    // مرّر رسائل console من الريندرر للتشخيص
+    app.on('web-contents-created', (_e, wc) => {
+      wc.on('console-message', (_ev, _level, message) => {
+        if (message.includes('RESUME-DEBUG') || message.includes('RESTORE-DEBUG')) {
+          console.log('RENDERER:', message.slice(0, 300))
+        }
+      })
+    })
+    let tbuf = ''
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', (c) => {
+      tbuf += c
+      let i: number
+      while ((i = tbuf.indexOf('\n')) >= 0) {
+        const line = tbuf.slice(0, i).trim()
+        tbuf = tbuf.slice(i + 1)
+        if (!line) continue
+        try {
+          const { id, expr } = JSON.parse(line) as { id: number; expr: string }
+          const win = BrowserWindow.getAllWindows()[0]
+          if (!win) {
+            process.stdout.write(JSON.stringify({ id, error: 'no window' }) + '\n')
+            continue
+          }
+          void win.webContents
+            .executeJavaScript(expr, true)
+            .then(
+              (v) => process.stdout.write(JSON.stringify({ id, value: v ?? null }) + '\n'),
+              (e) => process.stdout.write(JSON.stringify({ id, error: String(e) }) + '\n')
+            )
+        } catch (e) {
+          process.stdout.write(JSON.stringify({ id: null, error: 'bad line: ' + String(e) }) + '\n')
+        }
+      }
+    })
+    console.log('MAKTABA-TEST-BRIDGE: ready')
+  }
 
   // فتح ملفات ممررة عند الإقلاع (فتح باستخدام)
   app.on('open-file', (e, p) => {

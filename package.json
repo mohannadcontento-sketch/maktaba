@@ -1,6 +1,6 @@
 {
   "name": "maktaba",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "مكتبة — قارئ كتب احترافي لملفات EPUB و PDF",
   "main": "./out/main/index.js",
   "author": "Maktaba",

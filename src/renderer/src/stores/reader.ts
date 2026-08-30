@@ -320,11 +320,19 @@ export const useReader = create<ReaderState>((set, get) => ({
     if (!book) return
     const status =
       finished || progress >= 99.5 ? 'finished' : progress > 0.5 ? 'reading' : book.status
-    await window.api.updateBook(book.id, {
+    const patch = {
       progress,
-      lastLocation: location ?? undefined,
+      lastLocation: location ?? book.lastLocation,
       status,
       lastReadAt: Date.now()
-    })
+    }
+    await window.api.updateBook(book.id, patch)
+    // مزامنة المخازن: بلا هذه الخطوة تعيد الفتح اللاحق نسخة قديمة من lastLocation/progress
+    // فتُستعاد الصفحة 1 وتُكتب فوق موضع القراءة الحقيقي
+    const { useLibrary } = await import('@/stores/library')
+    useLibrary.setState((s) => ({
+      books: s.books.map((x) => (x.id === book.id ? { ...x, ...patch } : x))
+    }))
+    set((s) => (s.book?.id === book.id ? { book: { ...s.book, ...patch } } : {}))
   }
 }))

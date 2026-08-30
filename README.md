@@ -2,16 +2,16 @@
 
 قارئ كتب احترافي لملفات **EPUB** و **PDF** بواجهة عربية أولاً (RTL)، مبني بتقنيات الويب ويعمل على Windows.
 
-![Tech](https://img.shields.io/badge/Electron-33-47848F) ![React](https://img.shields.io/badge/React-18-61DAFB) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![License](https://img.shields.io/badge/License-MIT-green) ![Version](https://img.shields.io/badge/%D8%A7%D9%84%D8%A5%D8%B5%D8%AF%D8%A7%D8%B1-2.0.1-blue)
+![Tech](https://img.shields.io/badge/Electron-33-47848F) ![React](https://img.shields.io/badge/React-18-61DAFB) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![License](https://img.shields.io/badge/License-MIT-green) ![Version](https://img.shields.io/badge/%D8%A7%D9%84%D8%A5%D8%B5%D8%AF%D8%A7%D8%B1-2.1.0-blue)
 
 ---
 
-## 📥 التنزيل — النسخة 2.0.1
+## 📥 التنزيل — النسخة 2.1.0
 
 | الحزمة | الوصف |
 |---|---|
-| `Maktaba-Setup-2.0.1.exe` | مثبّت تفاعلي — يكتشف بيانات النسخة السابقة ويسألك إن أردت حذفها والبدء من جديد |
-| `Maktaba-Portable-2.0.1.exe` | نسخة محمولة تعمل دون تثبيت |
+| `Maktaba-Setup-2.1.0.exe` | مثبّت تفاعلي — يكتشف بيانات النسخة السابقة ويسألك إن أردت حذفها والبدء من جديد |
+| `Maktaba-Portable-2.1.0.exe` | نسخة محمولة تعمل دون تثبيت |
 
 > ⬇️ **[حمّل الحزم من صفحة Releases](https://github.com/mohannadcontento-sketch/maktaba/releases/latest)**
 
@@ -98,8 +98,8 @@ npm run fixtures         # توليد كتب عينة للتجربة في sample
 
 بعد `npm run dist` تجد في مجلد `release/`:
 
-- `Maktaba-Setup-2.0.1.exe` — مثبت تفاعلي مع اختيار مجلد التثبيت واختصار سطح المكتب.
-- `Maktaba-Portable-2.0.1.exe` — نسخة محمولة تعمل دون تثبيت.
+- `Maktaba-Setup-2.1.0.exe` — مثبت تفاعلي مع اختيار مجلد التثبيت واختصار سطح المكتب.
+- `Maktaba-Portable-2.1.0.exe` — نسخة محمولة تعمل دون تثبيت.
 
 ---
 
